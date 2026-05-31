@@ -42,15 +42,15 @@ with st.sidebar:
     st.markdown("### 🕯️ Candle Strictness")
     base_limit = st.slider("Max Base Candles Allowed", 1, 6, 5)
     
-    # New Min-Max Range Slider for Leg-Outs
     min_legout, max_legout = st.slider("Leg-Out Candles (Min - Max)", 1, 6, (1, 3))
     
-    legout_strength = st.slider("Min Leg-Out Body Size (%)", 30, 90, 50, help="Minimum body percentage to be considered an explosive leg-out.")
+    # NEW: Min/Max slider for Leg-out body size (51% to 100%)
+    min_leg_pct, max_leg_pct = st.slider("Leg-Out Body Size (%)", 51, 100, (60, 100), help="Minimum and maximum body percentage for an explosive leg-out.")
 
 symbols_to_scan = nifty500_list[:10] if "Test" in scan_mode else nifty500_list
 
 # --- CORE ALGORITHM ---
-def scan_zones(ticker, tf, mode, max_base, min_leg, max_leg, leg_pct):
+def scan_zones(ticker, tf, mode, max_base, min_leg, max_leg, min_leg_pct, max_leg_pct):
     try:
         if tf in ["6mo", "12mo"]:
             raw_data = yf.Ticker(ticker).history(period='15y', interval='1mo')
@@ -73,12 +73,14 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, max_leg, leg_pct):
         # 1. STRICT BORING CANDLE RULE (Body strictly < 50% of Range)
         df['Is_Base'] = df['Body'] < (0.5 * df['Range'])
         
-        # 2. Pre-Calculate Strong Leg-Out Candles
-        body_ratio_req = (leg_pct / 100.0) * df['Range']
+        # 2. Pre-Calculate Strong Leg-Out Candles based on Min & Max body percentages
+        min_body_req = (min_leg_pct / 100.0) * df['Range']
+        max_body_req = (max_leg_pct / 100.0) * df['Range']
+        
         if mode == "Bullish Demand Zone":
-            df['Is_Strong'] = (df['Close'] > df['Open']) & (df['Body'] >= body_ratio_req)
+            df['Is_Strong'] = (df['Close'] > df['Open']) & (df['Body'] >= min_body_req) & (df['Body'] <= max_body_req)
         else:
-            df['Is_Strong'] = (df['Close'] < df['Open']) & (df['Body'] >= body_ratio_req)
+            df['Is_Strong'] = (df['Close'] < df['Open']) & (df['Body'] >= min_body_req) & (df['Body'] <= max_body_req)
             
         matches = []
         
@@ -166,7 +168,7 @@ if st.button("🔍 Execute Advanced Scan", type="primary", use_container_width=T
     
     for idx, ticker in enumerate(symbols_to_scan):
         bar.progress((idx + 1) / len(symbols_to_scan), text=f"Scanning {ticker}...")
-        res = scan_zones(ticker, timeframe, zone_type, base_limit, min_legout, max_legout, legout_strength)
+        res = scan_zones(ticker, timeframe, zone_type, base_limit, min_legout, max_legout, min_leg_pct, max_leg_pct)
         if res: results.extend(res)
             
     bar.empty()
