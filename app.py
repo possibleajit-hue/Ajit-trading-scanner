@@ -50,7 +50,7 @@ symbols_to_scan = nifty500_list[:10] if "Test" in scan_mode else nifty500_list
 # --- CORE ALGORITHM ---
 def scan_zones(ticker, tf, mode, max_base, leg_count, leg_pct):
     try:
-        # Custom Timeframes (6M, 12M)
+        # Custom Timeframes (6M, 12M) fetch 15 years to ensure enough data
         if tf in ["6mo", "12mo"]:
             raw_data = yf.Ticker(ticker).history(period='15y', interval='1mo')
             if len(raw_data) < 12: return None
@@ -60,7 +60,8 @@ def scan_zones(ticker, tf, mode, max_base, leg_count, leg_pct):
             df = raw_data.groupby('group').agg({'Open': 'last', 'High': 'max', 'Low': 'min', 'Close': 'first'}).iloc[::-1]
             df.index = raw_data.groupby('group').apply(lambda x: x.index.min()).iloc[::-1]
         else:
-            df = yf.Ticker(ticker).history(period='3y', interval=tf)
+            # Standard Timeframes upgraded to 10 YEARS of history
+            df = yf.Ticker(ticker).history(period='10y', interval=tf)
             if len(df) < 15: return None
         
         df['Body'] = (df['Close'] - df['Open']).abs()
