@@ -25,7 +25,7 @@ def load_nifty500_symbols():
         df = pd.read_csv(url)
         return [str(symbol).strip() + ".NS" for symbol in df['Symbol'].tolist()]
     except Exception:
-        return ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "TATAMOTORS.NS"]
+        return ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "TATAMOTORS.NS", "ITC.NS", "SBIN.NS"]
 
 nifty500_list = load_nifty500_symbols()
 
@@ -39,13 +39,15 @@ with st.sidebar:
     zone_type = st.selectbox("📈 Zone Type", ["Bullish Demand Zone", "Bearish Supply Zone"])
     
     st.divider()
+    st.markdown("### 🎯 Trade Action Filter")
+    # NEW TOGGLE: Only show stocks that have pulled back into the zone!
+    only_in_zone = st.checkbox("Show ONLY 'Price in Zone' (Ready to Trade)", value=False, help="Hides all zones except the ones where the current market price is touching the zone right now.")
+    
+    st.divider()
     st.markdown("### 🕯️ Candle Strictness")
     base_limit = st.slider("Max Base Candles Allowed", 1, 6, 5)
-    
     min_legout, max_legout = st.slider("Leg-Out Candles (Min - Max)", 1, 6, (1, 3))
-    
-    # NEW: Min/Max slider for Leg-out body size (51% to 100%)
-    min_leg_pct, max_leg_pct = st.slider("Leg-Out Body Size (%)", 51, 100, (60, 100), help="Minimum and maximum body percentage for an explosive leg-out.")
+    min_leg_pct, max_leg_pct = st.slider("Leg-Out Body Size (%)", 51, 100, (60, 100))
 
 symbols_to_scan = nifty500_list[:10] if "Test" in scan_mode else nifty500_list
 
@@ -67,13 +69,16 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, max_leg, min_leg_pct, max_le
             df = yf.Ticker(ticker).history(period='10y', interval=tf)
             if len(df) < 15: return None
         
+        # Get absolute latest price for pullback check
+        current_price = round(df['Close'].iloc[-1], 2)
+        
         df['Body'] = (df['Close'] - df['Open']).abs()
         df['Range'] = df['High'] - df['Low']
         
-        # 1. STRICT BORING CANDLE RULE (Body strictly < 50% of Range)
+        # 1. STRICT BORING CANDLE RULE
         df['Is_Base'] = df['Body'] < (0.5 * df['Range'])
         
-        # 2. Pre-Calculate Strong Leg-Out Candles based on Min & Max body percentages
+        # 2. Leg-Out calculations
         min_body_req = (min_leg_pct / 100.0) * df['Range']
         max_body_req = (max_leg_pct / 100.0) * df['Range']
         
@@ -85,28 +90,23 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, max_leg, min_leg_pct, max_le
         matches = []
         
         i = 1
-        # Left-to-Right Sequential Scanner
         while i < len(df) - min_leg:
             if df['Is_Base'].iloc[i]:
                 base_start = i
                 base_end = i
                 
-                # Count consecutive boring candles
                 while base_end + 1 < len(df) and df['Is_Base'].iloc[base_end + 1]:
                     base_end += 1
                 
                 base_count = base_end - base_start + 1
                 
-                # If base count is within allowed limit
                 if base_count <= max_base:
                     legout_start = base_end + 1
                     legout_count = 0
                     
-                    # Count consecutive explosive leg-out candles
                     while legout_start + legout_count < len(df) and df['Is_Strong'].iloc[legout_start + legout_count]:
                         legout_count += 1
                         
-                    # Check if actual leg-outs fall perfectly within your Min and Max slider setting
                     if min_leg <= legout_count <= max_leg:
                         leg_in_idx = base_start - 1
                         
@@ -116,6 +116,7 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, max_leg, min_leg_pct, max_le
                             base_lows = df['Low'].iloc[base_start : base_end + 1]
                             base_highs = df['High'].iloc[base_start : base_end + 1]
                             
+                            # Determine Zone & Actionable Status
                             if mode == "Bullish Demand Zone":
                                 leg_in_bullish = df['Close'].iloc[leg_in_idx] > df['Open'].iloc[leg_in_idx]
                                 pattern = "RBR 🚀" if leg_in_bullish else "DBR 📉🚀"
@@ -123,7 +124,11 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, max_leg, min_leg_pct, max_le
                                 z_ceil = round(max(base_opens.max(), base_closes.max()), 2)
                                 z_floor = round(base_lows.min(), 2)
                                 
-                                future_data = df.iloc[legout_start + legout_count :]
+                                # Is price currently touching or slightly above (1% buffer) the zone?
+                                action_status = "In Zone 🎯" if (z_floor <= current_price <= (z_ceil * 1.015)) else "Away ⏳"
+                                
+                                # Exclude the current candle from mitigation check so active zones show as Fresh
+                                future_data = df.iloc[legout_start + legout_count : -1]
                                 status = "Fresh 🟢"
                                 if not future_data.empty and future_data['Low'].min() <= z_ceil:
                                     status = "Mitigated/Tested 🟡"
@@ -135,7 +140,10 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, max_leg, min_leg_pct, max_le
                                 z_ceil = round(base_highs.max(), 2)
                                 z_floor = round(min(base_opens.min(), base_closes.min()), 2)
                                 
-                                future_data = df.iloc[legout_start + legout_count :]
+                                # Is price currently touching or slightly below (1% buffer) the zone?
+                                action_status = "In Zone 🎯" if ((z_floor * 0.985) <= current_price <= z_ceil) else "Away ⏳"
+                                
+                                future_data = df.iloc[legout_start + legout_count : -1]
                                 status = "Fresh 🟢"
                                 if not future_data.empty and future_data['High'].max() >= z_floor:
                                     status = "Mitigated/Tested 🟡"
@@ -148,11 +156,11 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, max_leg, min_leg_pct, max_le
                                 "Zone Status": status,
                                 "Exact Pattern": pattern,
                                 "Base Candles": base_count,
-                                "Leg-Outs": legout_count,
                                 "Ceiling (Proximal)": z_ceil,
-                                "Floor (Distal)": z_floor
+                                "Floor (Distal)": z_floor,
+                                "Current Price": current_price,
+                                "Trade Status": action_status
                             })
-                # Skip forward past this base to continue scanning correctly
                 i = base_end + 1
             else:
                 i += 1
@@ -174,17 +182,28 @@ if st.button("🔍 Execute Advanced Scan", type="primary", use_container_width=T
     bar.empty()
     
     if results:
-        # Sort Latest to Oldest
         df_display = pd.DataFrame(results)
         df_display['Date Detected'] = pd.to_datetime(df_display['Date Detected'])
         df_display = df_display.sort_values(by="Date Detected", ascending=False)
         df_display['Date Detected'] = df_display['Date Detected'].dt.strftime('%Y-%m-%d')
         
-        # Display Metrics
-        col1, col2 = st.columns(2)
-        col1.success(f"🎯 Found **{len(df_display)}** Institutional Zones.")
-        col2.info(f"🟢 **{len(df_display[df_display['Zone Status'] == 'Fresh 🟢'])}** Zones are Fresh.")
-        
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        # APPLY THE 'IN ZONE' FILTER IF CHECKED
+        if only_in_zone:
+            df_display = df_display[df_display['Trade Status'] == "In Zone 🎯"]
+            
+        if df_display.empty:
+            st.warning("No stocks are currently inside a Demand/Supply zone right now. Try unchecking the filter or expanding your scan timeframe.")
+        else:
+            # Display Metrics
+            col1, col2 = st.columns(2)
+            col1.success(f"🎯 Found **{len(df_display)}** Matching Zones.")
+            col2.info(f"🟢 **{len(df_display[df_display['Zone Status'] == 'Fresh 🟢'])}** Zones are Fresh.")
+            
+            # Highlight Actionable Rows automatically in the DataFrame
+            def highlight_actionable(val):
+                color = '#004d00' if val == "In Zone 🎯" else ''
+                return f'background-color: {color}'
+            
+            st.dataframe(df_display.style.applymap(highlight_actionable, subset=['Trade Status']), use_container_width=True, hide_index=True)
     else:
         st.warning("No patterns found matching these strict institutional criteria.")
