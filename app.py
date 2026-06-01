@@ -5,7 +5,7 @@ import numpy as np
 import time
 
 # --- PAGE CONFIGURATION & UI THEME ---
-st.set_page_config(page_title="Institutional Sniper v3.0", layout="wide", page_icon="🎯")
+st.set_page_config(page_title="Institutional Sniper v4.0", layout="wide", page_icon="🎯")
 
 st.markdown("""
     <style>
@@ -16,8 +16,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="main-title">⚡ INSTITUTIONAL SNIPER ENGINE v3.0</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">Anti-Ban Bulk Download & 10% Strict Penetration Limit</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-title">⚡ INSTITUTIONAL SNIPER ENGINE v4.0</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-title">Controlled Safe-Batching Architecture (Bypasses Server Blocks)</p>', unsafe_allow_html=True)
 
 # --- LOCAL SECTOR DATA LOADER ---
 @st.cache_data
@@ -36,7 +36,7 @@ def load_all_nse_segments():
     segments["NIFTY Smallcap 250"] = format_tickers("ind_niftysmallcap250list.csv")
     segments["Full NIFTY 500"] = format_tickers("ind_nifty500list.csv")
     
-    fallback = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "TATAMOTORS.NS", "SBIN.NS", "ITC.NS", "HINDALCO.NS"]
+    fallback = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "TATAMOTORS.NS", "SBIN.NS", "ITC.NS"]
     for k in list(segments.keys()):
         if not segments[k]:
             segments[k] = fallback
@@ -84,57 +84,66 @@ with st.sidebar:
 base_list = all_segments[market_segment]
 symbols_to_scan = base_list[:5] if "Quick Test" in scan_range else base_list
 
-# --- ANTI-BAN BULK DATA DOWNLOADER ---
-@st.cache_data(ttl=900) # Caches data for 15 mins to allow instant slider tweaking
-def fetch_bulk_data(tickers, tf):
-    try:
-        if tf == "15m":
-            period, interval = '60d', '15m'
-        elif tf == "75m":
-            period, interval = '60d', '15m'
-        elif tf == "125m":
-            period, interval = '60d', '5m'
-        elif tf in ["1d", "1wk"]:
-            period, interval = '3y', tf
-        else:
-            period, interval = '10y', tf
-
-        # Download all data in one massively optimized multi-threaded request
-        raw_data = yf.download(tickers, period=period, interval=interval, group_by='ticker', threads=True, timeout=15)
+# --- RESAMPLING HELPER ---
+def resample_dataframe(df, tf):
+    if len(df) < 20: return None
+    if tf in ["75m", "125m"]:
+        group_size = 5 if tf == "75m" else 25
+        df['Date'] = df.index.date
+        df['block'] = df.groupby('Date').cumcount() // group_size
         
-        # If only 1 ticker is passed (Quick Test), yfinance drops the multi-index. Fix it structurally.
-        if len(tickers) == 1:
-            raw_data.columns = pd.MultiIndex.from_product([tickers, raw_data.columns])
-
-        processed_dict = {}
+        resampled = df.groupby(['Date', 'block']).agg({
+            'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'
+        }).dropna()
         
-        for ticker in tickers:
-            try:
-                # Extract specific ticker data and drop completely empty rows
-                df = raw_data[ticker].dropna(how='all').copy()
-                if len(df) < 20: continue
-                
-                # RESAMPLING LOGIC FOR 75M & 125M
-                if tf in ["75m", "125m"]:
-                    group_size = 5 if tf == "75m" else 25
-                    df['Date'] = df.index.date
-                    df['block'] = df.groupby('Date').cumcount() // group_size
-                    
-                    resampled = df.groupby(['Date', 'block']).agg({
-                        'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'
-                    }).dropna()
-                    
-                    # Ensure index is correctly attached
-                    resampled.index = df.groupby(['Date', 'block']).apply(lambda x: x.index[0])
-                    processed_dict[ticker] = resampled
-                else:
-                    processed_dict[ticker] = df
-            except:
-                continue
-                
-        return processed_dict
-    except Exception:
-        return {}
+        resampled.index = df.groupby(['Date', 'block']).apply(lambda x: x.index[0])
+        return resampled
+    return df
+
+# --- SAFE SYSTEM BATCH DOWNLOADER ---
+@st.cache_data(ttl=600)
+def fetch_safe_batch_data(tickers, tf):
+    if tf in ["15m", "75m", "125m"]:
+        period, interval = '60d', '15m' if tf != "125m" else '5m'
+    elif tf in ["1d", "1wk"]:
+        period, interval = '3y', tf
+    else:
+        period, interval = '10y', tf
+
+    processed_dict = {}
+    batch_size = 5 # Small, highly secure batch size to stay under the radar
+    
+    # Progress visualization container
+    holder = st.empty()
+    
+    for idx in range(0, len(tickers), batch_size):
+        chunk = tickers[idx:idx + batch_size]
+        holder.info(f"Downloading Batch {int(idx/batch_size)+1} of {int(np.ceil(len(tickers)/batch_size))}...")
+        
+        try:
+            # Download small cluster safely
+            raw_chunk = yf.download(chunk, period=period, interval=interval, group_by='ticker', threads=True, timeout=10, progress=False)
+            
+            for ticker in chunk:
+                try:
+                    if len(chunk) == 1:
+                        df = raw_chunk.dropna(how='all').copy()
+                    else:
+                        df = raw_chunk[ticker].dropna(how='all').copy()
+                        
+                    if not df.empty and len(df) >= 20:
+                        processed_df = resample_dataframe(df, tf)
+                        if processed_df is not None:
+                            processed_dict[ticker] = processed_df
+                except:
+                    continue
+        except:
+            pass
+            
+        time.sleep(0.4) # Crucial anti-ban breath between server calls
+        
+    holder.empty()
+    return processed_dict
 
 # --- CORE STRICT ALGORITHM ENGINE ---
 def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
@@ -144,7 +153,6 @@ def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
         df['Body'] = (df['Close'] - df['Open']).abs()
         df['Range'] = df['High'] - df['Low']
         df['Range'] = np.where(df['Range'] == 0, 0.0001, df['Range'])
-        
         df['Body_Pct'] = (df['Body'] / df['Range']) * 100.0
         
         df['Is_Base'] = df['Body_Pct'] < 50.0
@@ -161,16 +169,13 @@ def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
             if df['Is_Base'].iloc[i]:
                 base_start = i
                 base_end = i
-                
                 while base_end + 1 < len(df) and df['Is_Base'].iloc[base_end + 1]:
                     base_end += 1
                 
                 base_count = base_end - base_start + 1
-                
                 if base_count <= max_base:
                     legout_start = base_end + 1
                     legout_count = 0
-                    
                     while legout_start + legout_count < len(df) and df['Is_Strong'].iloc[legout_start + legout_count]:
                         legout_count += 1
                         
@@ -181,73 +186,51 @@ def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
                             z_ceil = round(max(df['Open'].iloc[base_start : base_end + 1].max(), df['Close'].iloc[base_start : base_end + 1].max()), 2)
                             z_floor = round(df['Low'].iloc[base_start : base_end + 1].min(), 2)
                             
-                            zone_size = abs(z_ceil - z_floor)
-                            if zone_size == 0: zone_size = 0.01
+                            zone_size = abs(z_ceil - z_floor) if abs(z_ceil - z_floor) != 0 else 0.01
                             penetration_limit = z_ceil - (zone_size * 0.10)
                             
                             if future_data.empty:
                                 state = "Unmitigated 🟢"
                             else:
                                 lowest_since = future_data['Low'].min()
-                                
                                 if lowest_since < penetration_limit:
                                     state = "Deeply Mitigated 🔴"
                                 elif lowest_since <= z_ceil:
                                     candles_in_zone = ((future_data['Low'] <= z_ceil) & (future_data['High'] >= z_floor)).sum()
-                                    if 1 <= candles_in_zone <= 6:
-                                        state = "In the Zone (1-6 Candles) 🟡"
-                                    else:
-                                        state = "Deeply Mitigated 🔴" 
+                                    state = "In the Zone (1-6 Candles) 🟡" if 1 <= candles_in_zone <= 6 else "Deeply Mitigated 🔴"
                                 else:
                                     state = "Unmitigated 🟢"
                                     
-                            if state == "Unmitigated 🟢" and (z_ceil < current_price <= z_ceil * 1.015):
-                                proximity = "Just Approaching 🎯"
-                            elif "In the Zone" in state:
-                                proximity = "Inside Zone ⚡"
-                            else:
-                                proximity = "Normal"
+                            proximity = "Just Approaching 🎯" if state == "Unmitigated 🟢" and (z_ceil < current_price <= z_ceil * 1.015) else ("Inside Zone ⚡" if "In the Zone" in state else "Normal")
                                 
                         else: # Bearish Supply Zone
                             z_ceil = round(df['High'].iloc[base_start : base_end + 1].max(), 2)
                             z_floor = round(min(df['Open'].iloc[base_start : base_end + 1].min(), df['Close'].iloc[base_start : base_end + 1].min()), 2)
                             
-                            zone_size = abs(z_ceil - z_floor)
-                            if zone_size == 0: zone_size = 0.01
+                            zone_size = abs(z_ceil - z_floor) if abs(z_ceil - z_floor) != 0 else 0.01
                             penetration_limit = z_floor + (zone_size * 0.10)
                             
                             if future_data.empty:
                                 state = "Unmitigated 🟢"
                             else:
                                 highest_since = future_data['High'].max()
-                                
                                 if highest_since > penetration_limit:
                                     state = "Deeply Mitigated 🔴"
                                 elif highest_since >= z_floor:
                                     candles_in_zone = ((future_data['High'] >= z_floor) & (future_data['Low'] <= z_ceil)).sum()
-                                    if 1 <= candles_in_zone <= 6:
-                                        state = "In the Zone (1-6 Candles) 🟡"
-                                    else:
-                                        state = "Deeply Mitigated 🔴"
+                                    state = "In the Zone (1-6 Candles) 🟡" if 1 <= candles_in_zone <= 6 else "Deeply Mitigated 🔴"
                                 else:
                                     state = "Unmitigated 🟢"
                                     
-                            if state == "Unmitigated 🟢" and (z_floor * 0.985 <= current_price < z_floor):
-                                proximity = "Just Approaching 🎯"
-                            elif "In the Zone" in state:
-                                proximity = "Inside Zone ⚡"
-                            else:
-                                proximity = "Normal"
+                            proximity = "Just Approaching 🎯" if state == "Unmitigated 🟢" and (z_floor * 0.985 <= current_price < z_floor) else ("Inside Zone ⚡" if "In the Zone" in state else "Normal")
 
                         if state != "Deeply Mitigated 🔴":
                             date_detected = df.index[legout_start].strftime('%Y-%m-%d %H:%M') if hasattr(df.index[legout_start], 'strftime') else str(df.index[legout_start])
-                            first_legout_pct = df['Body_Pct'].iloc[legout_start]
-                            
                             matches.append({
                                 "Ticker": ticker.replace('.NS', ''),
                                 "Formation Date": date_detected,
                                 "Leg-Out Count": legout_count,
-                                "Leg-Out Strength": f"{round(first_legout_pct, 1)}%",
+                                "Leg-Out Strength": f"{round(df['Body_Pct'].iloc[legout_start], 1)}%",
                                 "Base": base_count,
                                 "Proximal (Ceiling)": z_ceil,
                                 "Distal (Floor)": z_floor,
@@ -259,27 +242,25 @@ def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
             else:
                 i += 1
         return matches
-    except Exception:
+    except:
         return None
 
 # --- SCANNER RUNNER EXECUTION ---
 if st.button("🔍 Run Institutional Alignment Scan", type="primary", use_container_width=True):
     results = []
     
-    # 1. BULK DOWNLOAD PHASE
-    with st.spinner(f"Initiating High-Speed Bulk Download for {len(symbols_to_scan)} tickers. Please wait..."):
-        all_market_data = fetch_bulk_data(symbols_to_scan, timeframe)
+    # 1. CONTROLLED CHUNK DOWNLOAD
+    all_market_data = fetch_safe_batch_data(symbols_to_scan, timeframe)
     
     if not all_market_data:
-        st.error("Data connection failed. Yahoo Finance might be temporarily blocking the connection. Please try again in a few minutes.")
+        st.error("Data streaming was blocked by the host server. Please wait 10 seconds and tap scan again.")
     else:
-        # 2. LOCAL CALCULATION PHASE (Lightning Fast)
-        progress_bar = st.progress(0, text="Crunching institutional formulas...")
+        # 2. LOCAL CALCULATION PHASE (Instantaneous)
+        progress_bar = st.progress(0, text="Evaluating institutional zone strictness...")
         total_symbols = len(symbols_to_scan)
         
         for idx, ticker in enumerate(symbols_to_scan):
             progress_bar.progress((idx + 1) / total_symbols, text=f"Analyzing {ticker} Structure ({idx+1}/{total_symbols})...")
-            time.sleep(0.005) # Just enough for the UI to breathe
             
             if ticker in all_market_data:
                 res = scan_zones(ticker, all_market_data[ticker], zone_type, base_limit, min_legout, min_legout_size_pct)
