@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from fyers_apiv3 import fyersModel
 
 # --- PAGE CONFIGURATION & UI THEME ---
-st.set_page_config(page_title="Fyers Institutional Sniper v7.0", layout="wide", page_icon="🎯")
+st.set_page_config(page_title="Fyers Institutional Sniper v8.0", layout="wide", page_icon="🎯")
 
 st.markdown("""
     <style>
@@ -17,8 +17,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="main-title">⚡ FYERS INSTITUTIONAL SNIPER v7.0</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">Broker API Powered High-Speed Custom Timeframe Scanner</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-title">⚡ FYERS INSTITUTIONAL SNIPER v8.0</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-title">Macro-Resampling Architecture & Broker API Integration</p>', unsafe_allow_html=True)
 
 # --- LOCAL SECTOR DATA LOADER ---
 @st.cache_data
@@ -49,19 +49,14 @@ all_segments = load_all_nse_segments()
 # --- SIDEBAR CONTROL PANEL ---
 with st.sidebar:
     st.header("🔑 Fyers API Authentication")
-    
-    # 1. Permanent Keys
     fyers_app_id = st.text_input("Fyers App ID (Client ID)", value="6905Y3PB5A-100", type="password")
     fyers_secret_id = st.text_input("Fyers Secret ID", value="FLBIZOXZD2", type="password")
     redirect_uri = "https://trade.fyers.in/"
     
     st.divider()
     st.markdown("### ☀️ Morning Activation")
-    
-    # Generate the login link dynamically
     login_url = f"https://api-t1.fyers.in/api/v3/generate-authcode?client_id={fyers_app_id}&redirect_uri={redirect_uri}&response_type=code&state=scanner"
     st.markdown(f'[👉 **Step 1: Click Here to Login & Get Code**]({login_url})')
-    
     auth_code = st.text_input("Step 2: Paste the 'code' from URL here", type="password")
     
     st.divider()
@@ -70,8 +65,9 @@ with st.sidebar:
     scan_range = st.radio("Scan Target Length", ["Full Segment Scan", "Quick Test (First 5 Stocks)"])
     
     st.divider()
-    tf_display = st.selectbox("⏳ Native Resolution Timeframe", ["15m", "75m", "125m", "1d", "1wk", "1mo"])
-    tf_map = {"15m": "15", "75m": "75", "125m": "125", "1d": "D", "1wk": "W", "1mo": "M"}
+    # EXTENDED TIME FRAME SELECTOR CONTAINING BOTH CUSTOM INTRADAY AND CUSTOM MACRO TIERS
+    tf_display = st.selectbox("⏳ Selection Timeframe", ["15m", "75m", "125m", "1d", "1wk", "1mo", "3mo", "6mo", "1yr"])
+    tf_map = {"15m": "15", "75m": "75", "125m": "125", "1d": "D", "1wk": "W", "1mo": "M", "3mo": "M", "6mo": "M", "1yr": "M"}
     timeframe = tf_map[tf_display]
     
     zone_type = st.selectbox("📉 Order Type", ["Bullish Demand Zone", "Bearish Supply Zone"])
@@ -93,6 +89,32 @@ with st.sidebar:
 
 base_list = all_segments[market_segment]
 symbols_to_scan = base_list[:5] if "Quick Test" in scan_range else base_list
+
+# --- RESAMPLING HELPER FOR INTRADAY AND MACRO ---
+def resample_dataframe(df, tf_disp):
+    if df.empty or len(df) < 3: return None
+    
+    # 1. Intraday Custom Resampling
+    if tf_disp in ["75m", "125m"]:
+        group_size = 5 if tf_disp == "75m" else 25
+        df['Date'] = df.index.date
+        df['block'] = df.groupby('Date').cumcount() // group_size
+        
+        resampled = df.groupby(['Date', 'block']).agg({
+            'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'
+        }).dropna()
+        resampled.index = df.groupby(['Date', 'block']).apply(lambda x: x.index[0])
+        return resampled
+        
+    # 2. Macro Custom Calendar Resampling
+    elif tf_disp in ["3mo", "6mo", "1yr"]:
+        rule = "3M" if tf_disp == "3mo" else ("6M" if tf_disp == "6mo" else "12M")
+        resampled = df.resample(rule).agg({
+            'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
+        }).dropna()
+        return resampled
+        
+    return df
 
 # --- CORE STRICT ALGORITHM ENGINE ---
 def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
@@ -174,7 +196,7 @@ def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
                             proximity = "Just Approaching 🎯" if state == "Unmitigated 🟢" and (z_floor * 0.985 <= current_price < z_floor) else ("Inside Zone ⚡" if "In the Zone" in state else "Normal")
 
                         if state != "Deeply Mitigated 🔴":
-                            date_detected = df.index[legout_start].strftime('%Y-%m-%d %H:%M')
+                            date_detected = df.index[legout_start].strftime('%Y-%m-%d')
                             matches.append({
                                 "Ticker": ticker,
                                 "Formation Date": date_detected,
@@ -201,14 +223,10 @@ if st.button("🔍 Run FYERS Institutional Scan", type="primary", use_container_
     else:
         results = []
         
-        # AUTOMATICALLY EXCHANGE AUTH CODE FOR ACCESS TOKEN
         try:
             session_model = fyersModel.SessionModel(
-                client_id=fyers_app_id,
-                secret_key=fyers_secret_id,
-                redirect_uri=redirect_uri,
-                response_type='code',
-                grant_type='authorization_code'
+                client_id=fyers_app_id, secret_key=fyers_secret_id,
+                redirect_uri=redirect_uri, response_type='code', grant_type='authorization_code'
             )
             session_model.set_token(auth_code)
             token_response = session_model.generate_token()
@@ -219,27 +237,27 @@ if st.button("🔍 Run FYERS Institutional Scan", type="primary", use_container_
             st.error(f"Fyers Handshake Failed: Ensure your Auth Code is fresh. Details: {e}")
             st.stop()
         
+        # DYNAMIC DURATION ASSIGNMENT
         end_date = datetime.now().strftime("%Y-%m-%d")
-        if timeframe in ["15", "75", "125"]:
+        if tf_display in ["15m", "75m", "125m"]:
             start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+        elif tf_display in ["3mo", "6mo", "1yr"]:
+            # Pull 15 full years of data to build reliable historical macro candles
+            start_date = (datetime.now() - timedelta(days=5475)).strftime("%Y-%m-%d")
         else:
-            start_date = (datetime.now() - timedelta(days=730)).strftime("%Y-%m-%d")
+            start_date = (datetime.now() - timedelta(days=1825)).strftime("%Y-%m-%d")
 
-        progress_bar = st.progress(0, text="Streaming native arrays from FYERS production data vaults...")
+        progress_bar = st.progress(0, text="Fetching raw candle blocks...")
         total_symbols = len(symbols_to_scan)
         
         for idx, symbol in enumerate(symbols_to_scan):
             fyers_symbol = f"NSE:{symbol}-EQ"
-            progress_bar.progress((idx + 1) / total_symbols, text=f"Scanning {symbol} ({idx+1}/{total_symbols})...")
+            progress_bar.progress((idx + 1) / total_symbols, text=f"Analyzing {symbol} Data Streams ({idx+1}/{total_symbols})...")
             
             try:
                 data = {
-                    "symbol": fyers_symbol,
-                    "resolution": timeframe,
-                    "date_format": "1",
-                    "range_from": start_date,
-                    "range_to": end_date,
-                    "cont_flag": "1"
+                    "symbol": fyers_symbol, "resolution": timeframe, "date_format": "1",
+                    "range_from": start_date, "range_to": end_date, "cont_flag": "1"
                 }
                 
                 response = fyers.history(data=data)
@@ -249,10 +267,14 @@ if st.button("🔍 Run FYERS Institutional Scan", type="primary", use_container_
                     df['Timestamp'] = pd.to_datetime(df['Timestamp'], unit='s').dt.tz_localize('UTC').dt.tz_convert('Asia/Kolkata')
                     df.set_index('Timestamp', inplace=True)
                     
-                    res = scan_zones(symbol, df, zone_type, base_limit, min_legout, min_legout_size_pct)
-                    if res:
-                        results.extend(res)
-            except Exception:
+                    # RUN DATA THROUGH RESAMPLER FILTER BEFORE CORE SEARCH
+                    processed_df = resample_dataframe(df, tf_display)
+                    
+                    if processed_df is not None and not processed_df.empty:
+                        res = scan_zones(symbol, processed_df, zone_type, base_limit, min_legout, min_legout_size_pct)
+                        if res:
+                            results.extend(res)
+            except:
                 continue
                 
         progress_bar.empty()
