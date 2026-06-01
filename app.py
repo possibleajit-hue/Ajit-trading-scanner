@@ -17,25 +17,27 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<p class="main-title">⚡ INSTITUTIONAL SNIPER ENGINE v2.0</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">10% Strict Penetration Limit & Multi-Timeframe Liquidity Scanner</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-title">10% Strict Penetration Limit, Local Data Vault & Multi-Timeframe Scanner</p>', unsafe_allow_html=True)
 
-# --- AUTOMATED SECTOR DATA LOADER ---
-@st.cache_data(ttl=86400)
+# --- LOCAL SECTOR DATA LOADER (ANTI-HANG, INSTANT LOAD) ---
+@st.cache_data
 def load_all_nse_segments():
     segments = {}
-    def format_tickers(url):
+    def format_tickers(filepath):
         try:
-            df = pd.read_csv(url)
+            df = pd.read_csv(filepath)
             return (df['Symbol'].astype(str).str.strip() + ".NS").tolist()
         except:
             return []
 
-    segments["NIFTY 50 (Mega Cap)"] = format_tickers("https://archives.nseindia.com/content/indices/ind_nifty50list.csv")
-    segments["NIFTY 100 (Large Cap)"] = format_tickers("https://archives.nseindia.com/content/indices/ind_nifty100list.csv")
-    segments["NIFTY Midcap 100"] = format_tickers("https://archives.nseindia.com/content/indices/ind_niftymidcap100list.csv")
-    segments["NIFTY Smallcap 250"] = format_tickers("https://archives.nseindia.com/content/indices/ind_niftysmallcap250list.csv")
-    segments["Full NIFTY 500"] = format_tickers("https://archives.nseindia.com/content/indices/ind_nifty500list.csv")
+    # Reading directly from your GitHub folder instantly
+    segments["NIFTY 50 (Mega Cap)"] = format_tickers("ind_nifty50list.csv")
+    segments["NIFTY 100 (Large Cap)"] = format_tickers("ind_nifty100list.csv")
+    segments["NIFTY Midcap 100"] = format_tickers("ind_niftymidcap100list.csv")
+    segments["NIFTY Smallcap 250"] = format_tickers("ind_niftysmallcap250list.csv")
+    segments["Full NIFTY 500"] = format_tickers("ind_nifty500list.csv")
     
+    # Fallback if a file name is mistyped
     fallback = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "TATAMOTORS.NS", "SBIN.NS", "ITC.NS", "HINDALCO.NS"]
     for k in list(segments.keys()):
         if not segments[k]:
@@ -168,16 +170,14 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, min_size_threshold):
                             else:
                                 lowest_since = future_data['Low'].min()
                                 
-                                # If it drops further than 10% inside the zone, it is DEAD.
                                 if lowest_since < penetration_limit:
                                     state = "Deeply Mitigated 🔴"
                                 elif lowest_since <= z_ceil:
-                                    # It touched the top 10% of the zone. Let's count how many candles stuck around.
                                     candles_in_zone = ((future_data['Low'] <= z_ceil) & (future_data['High'] >= z_floor)).sum()
                                     if 1 <= candles_in_zone <= 6:
                                         state = "In the Zone (1-6 Candles) 🟡"
                                     else:
-                                        state = "Deeply Mitigated 🔴" # Too much chop, zone is exhausted
+                                        state = "Deeply Mitigated 🔴" 
                                 else:
                                     state = "Unmitigated 🟢"
                                     
@@ -201,7 +201,6 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, min_size_threshold):
                             else:
                                 highest_since = future_data['High'].max()
                                 
-                                # If it spikes higher than 10% inside the zone, it is DEAD.
                                 if highest_since > penetration_limit:
                                     state = "Deeply Mitigated 🔴"
                                 elif highest_since >= z_floor:
@@ -220,7 +219,6 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, min_size_threshold):
                             else:
                                 proximity = "Normal"
 
-                        # Only add to matches if it hasn't been completely destroyed (>10% penetration)
                         if state != "Deeply Mitigated 🔴":
                             date_detected = df.index[legout_start].strftime('%Y-%m-%d %H:%M') if hasattr(df.index[legout_start], 'strftime') else str(df.index[legout_start])
                             first_legout_pct = df['Body_Pct'].iloc[legout_start]
