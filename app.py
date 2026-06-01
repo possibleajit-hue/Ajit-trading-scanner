@@ -24,7 +24,6 @@ st.markdown('<p class="sub-title">Advanced Order Block, Multi-Timeframe Multi-Se
 @st.cache_data(ttl=86400)
 def load_all_nse_segments():
     segments = {}
-    # Helper to clean and format tickers
     def format_tickers(url):
         try:
             df = pd.read_csv(url)
@@ -38,7 +37,6 @@ def load_all_nse_segments():
     segments["NIFTY Smallcap 250"] = format_tickers("https://archives.nseindia.com/content/indices/ind_niftysmallcap250list.csv")
     segments["Full NIFTY 500"] = format_tickers("https://archives.nseindia.com/content/indices/ind_nifty500list.csv")
     
-    # Global fallback if NSE servers block the request
     fallback = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "TATAMOTORS.NS", "SBIN.NS", "ITC.NS"]
     for k in list(segments.keys()):
         if not segments[k]:
@@ -58,7 +56,6 @@ with st.sidebar:
     st.markdown("### 📈 Trading Profile Pre-sets")
     profile = st.selectbox("Choose Profile", ["Custom", "Intraday Trading", "Swing Trading", "Long-Term Investing"])
     
-    # Auto-adjust timeframes based on selected trading profile
     if profile == "Intraday Trading":
         timeframe = st.selectbox("⏳ Timeframe", ["15m", "75m", "125m"])
     elif profile == "Swing Trading":
@@ -83,6 +80,9 @@ with st.sidebar:
     st.markdown("### 🕯️ Advanced Candle Strictness")
     base_limit = st.slider("Max Base Candles Allowed", 1, 6, 4)
     min_legout = st.slider("Min Leg-Out Candles Required", 1, 4, 1)
+    
+    # NEW REQUESTED CUSTOMIZABLE DYNAMIC LEGOUT SIZE SLIDER
+    legout_size_pct = st.slider("Leg-Out Candle Body Size (%)", 51, 100, 55, help="What percentage of the entire candle length must be the solid candle body? Higher = more powerful institutional volume break.")
 
 base_list = all_segments[market_segment]
 symbols_to_scan = base_list[:5] if "Quick Test" in scan_range else base_list
@@ -95,7 +95,6 @@ def fetch_and_resample(ticker, tf):
     elif tf == "75m":
         raw = t.history(period='60d', interval='15m', timeout=1.5)
         if len(raw) < 5: return None
-        # Group every 5 candles of 15m to create 75m
         raw['group'] = np.arange(len(raw)) // 5
         df = raw.groupby('group').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'})
         df.index = raw.index[::5][:len(df)]
@@ -103,7 +102,6 @@ def fetch_and_resample(ticker, tf):
     elif tf == "125m":
         raw = t.history(period='60d', interval='5m', timeout=1.5)
         if len(raw) < 25: return None
-        # Group every 25 candles of 5m to create 125m
         raw['group'] = np.arange(len(raw)) // 25
         df = raw.groupby('group').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'})
         df.index = raw.index[::25][:len(df)]
@@ -114,7 +112,7 @@ def fetch_and_resample(ticker, tf):
         return t.history(period='10y', interval=tf, timeout=1.5)
 
 # --- CORE ALGORITHM ENGINE ---
-def scan_zones(ticker, tf, mode, max_base, min_leg):
+def scan_zones(ticker, tf, mode, max_base, min_leg, size_threshold):
     try:
         df = fetch_and_resample(ticker, tf)
         if df is None or len(df) < 20: return None
@@ -126,10 +124,12 @@ def scan_zones(ticker, tf, mode, max_base, min_leg):
         
         df['Is_Base'] = df['Body'] < (0.5 * df['Range'])
         
+        # INTEGRATED THE DYNAMIC LEGOUT FILTER RATIO
+        ratio_threshold = size_threshold / 100.0
         if mode == "Bullish Demand Zone":
-            df['Is_Strong'] = (df['Close'] > df['Open']) & (df['Body'] >= 0.55 * df['Range'])
+            df['Is_Strong'] = (df['Close'] > df['Open']) & (df['Body'] >= ratio_threshold * df['Range'])
         else:
-            df['Is_Strong'] = (df['Close'] < df['Open']) & (df['Body'] >= 0.55 * df['Range'])
+            df['Is_Strong'] = (df['Close'] < df['Open']) & (df['Body'] >= ratio_threshold * df['Range'])
             
         matches = []
         i = 1
@@ -154,7 +154,6 @@ def scan_zones(ticker, tf, mode, max_base, min_leg):
                             z_ceil = round(max(df['Open'].iloc[base_start : base_end + 1].max(), df['Close'].iloc[base_start : base_end + 1].max()), 2)
                             z_floor = round(df['Low'].iloc[base_start : base_end + 1].min(), 2)
                             
-                            # Determine Zone State Condition
                             if future_data.empty:
                                 state = "Unmitigated 🟢"
                             else:
@@ -162,7 +161,6 @@ def scan_zones(ticker, tf, mode, max_base, min_leg):
                                 if lowest_since < z_floor:
                                     state = "Mitigated 🔴"
                                 elif lowest_since <= z_ceil:
-                                    # Check how many candles have sat inside the zone boundaries
                                     candles_in_zone = ((future_data['Low'] <= z_ceil) & (future_data['High'] >= z_floor)).sum()
                                     if 2 <= candles_in_zone <= 3:
                                         state = "In the Zone (2-3 Candles) 🟡"
@@ -171,7 +169,6 @@ def scan_zones(ticker, tf, mode, max_base, min_leg):
                                 else:
                                     state = "Unmitigated 🟢"
                                     
-                            # Check Proximity (Just Approaching)
                             if state == "Unmitigated 🟢" and (z_ceil < current_price <= z_ceil * 1.015):
                                 proximity = "Just Approaching 🎯"
                             elif "In the Zone" in state:
@@ -233,9 +230,10 @@ if st.button("🔍 Run Institutional Alignment Scan", type="primary", use_contai
     
     for idx, ticker in enumerate(symbols_to_scan):
         progress_bar.progress((idx + 1) / total_symbols, text=f"Analyzing {ticker} Structure ({idx+1}/{total_symbols})...")
-        time.sleep(0.02)
+        time.sleep(0.01)
         
-        res = scan_zones(ticker, timeframe, zone_type, base_limit, min_legout)
+        # Passed legout_size_pct directly into parameters
+        res = scan_zones(ticker, timeframe, zone_type, base_limit, min_legout, legout_size_pct)
         if res:
             results.extend(res)
             
@@ -243,11 +241,8 @@ if st.button("🔍 Run Institutional Alignment Scan", type="primary", use_contai
     
     if results:
         df_display = pd.DataFrame(results)
-        
-        # Keep only the single most recent valid pattern per stock
         df_display = df_display.sort_values(by="Formation Date", ascending=False).drop_duplicates(subset=["Ticker"], keep="first")
         
-        # Apply the user's specific Zone Condition filters
         if state_filter == "Just Approaching (Nearing Edge)":
             df_display = df_display[df_display['Live Alignment'] == "Just Approaching 🎯"]
         elif state_filter == "In the Zone (2-3 Candles Formed)":
@@ -255,13 +250,11 @@ if st.button("🔍 Run Institutional Alignment Scan", type="primary", use_contai
         elif state_filter == "Unmitigated (100% Completely Fresh)":
             df_display = df_display[df_display['Zone State'] == "Unmitigated 🟢"]
         else:
-            # Exclude raw old mitigated clutter from showing in the main dashboard view
             df_display = df_display[df_display['Zone State'] != "Mitigated 🔴"]
             
         if df_display.empty:
             st.warning("No institutional zones matched your exact state filter conditions at this moment.")
         else:
-            # Layout metrics panel
             c1, c2, c3 = st.columns(3)
             with c1:
                 st.markdown(f"<div class='metric-card'><b>Total Formations:</b><br><span style='font-size:24px;'>{len(df_display)}</span></div>", unsafe_allow_html=True)
@@ -272,7 +265,6 @@ if st.button("🔍 Run Institutional Alignment Scan", type="primary", use_contai
                 
             st.markdown("<br>", unsafe_allow_html=True)
             
-            # Row styling highlights
             def highlight_live_state(val):
                 if "Approaching" in str(val): return 'background-color: #1B5E20; color: white;'
                 if "Inside" in str(val): return 'background-color: #E65100; color: white;'
