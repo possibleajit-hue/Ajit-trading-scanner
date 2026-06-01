@@ -8,7 +8,7 @@ import io
 import os
 
 # --- PAGE CONFIGURATION & UI THEME ---
-st.set_page_config(page_title="Institutional Sniper v5.0", layout="wide", page_icon="🎯")
+st.set_page_config(page_title="Institutional Sniper v6.0", layout="wide", page_icon="🎯")
 
 st.markdown("""
     <style>
@@ -19,30 +19,29 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="main-title">⚡ INSTITUTIONAL SNIPER ENGINE v5.0</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">Anti-Deadlock Sequential Engine & Browser-Spoofing Data Loader</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-title">⚡ INSTITUTIONAL SNIPER ENGINE v6.0</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-title">Single-Shot Batch Architecture & Cloud Anti-Throttling Engine</p>', unsafe_allow_html=True)
 
-# --- BULLETPROOF SECTOR DATA LOADER ---
+# --- BROWSER INTERFACE SPOOFING SETUP ---
+session = requests.Session()
+session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+})
+
+# --- LOCAL SECTOR DATA LOADER ---
 @st.cache_data(ttl=86400)
 def load_all_nse_segments():
     segments = {}
-    
-    # Disguise the app as a standard Google Chrome browser to bypass NSE blocks
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-
     def get_tickers(url, local_file):
-        # Method 1: Try to read the local CSV if you uploaded it successfully
         if os.path.exists(local_file):
             try:
                 df = pd.read_csv(local_file)
                 return (df['Symbol'].astype(str).str.strip() + ".NS").tolist()
             except: pass
-            
-        # Method 2: If no local file, spoof a web browser and download it live
         try:
-            res = requests.get(url, headers=headers, timeout=5)
+            res = session.get(url, timeout=5)
             df = pd.read_csv(io.StringIO(res.text))
             return (df['Symbol'].astype(str).str.strip() + ".NS").tolist()
         except:
@@ -54,12 +53,10 @@ def load_all_nse_segments():
     segments["NIFTY Smallcap 250"] = get_tickers("https://archives.nseindia.com/content/indices/ind_niftysmallcap250list.csv", "ind_niftysmallcap250list.csv")
     segments["Full NIFTY 500"] = get_tickers("https://archives.nseindia.com/content/indices/ind_nifty500list.csv", "ind_nifty500list.csv")
     
-    # Method 3: Ultimate Fallback just in case everything fails
     fallback = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "TATAMOTORS.NS", "SBIN.NS", "ITC.NS"]
     for k in list(segments.keys()):
         if not segments[k]:
             segments[k] = fallback
-            
     return segments
 
 all_segments = load_all_nse_segments()
@@ -119,9 +116,9 @@ def resample_dataframe(df, tf):
         return resampled
     return df
 
-# --- ANTI-DEADLOCK SEQUENTIAL DOWNLOADER ---
-@st.cache_data(ttl=600)
-def fetch_safe_sequential_data(tickers, tf):
+# --- ANTI-BLOCK SINGLE-SHOT DOWNLOADER ---
+@st.cache_data(ttl=300)
+def fetch_bulletproof_data(tickers, tf):
     if tf in ["15m", "75m", "125m"]:
         period, interval = '60d', '15m' if tf != "125m" else '5m'
     elif tf in ["1d", "1wk"]:
@@ -129,26 +126,38 @@ def fetch_safe_sequential_data(tickers, tf):
     else:
         period, interval = '10y', tf
 
-    processed_dict = {}
-    holder = st.empty()
-    
-    # We loop through ONE by ONE to ensure Yahoo Finance never freezes the connection
-    for i, ticker in enumerate(tickers):
-        holder.info(f"Downloading historical data for {ticker} ({i+1}/{len(tickers)})...")
-        try:
-            t = yf.Ticker(ticker)
-            df = t.history(period=period, interval=interval, timeout=3)
-            if not df.empty and len(df) >= 20:
-                resampled = resample_dataframe(df, tf)
-                if resampled is not None:
-                    processed_dict[ticker] = resampled
-        except Exception:
-            pass # Silently skip broken tickers instead of freezing
-            
-        time.sleep(0.1) # A tiny breathing pause to respect Yahoo's servers
+    try:
+        # Pull everything instantly in a single network pass with browser signatures
+        raw_data = yf.download(
+            tickers=tickers,
+            period=period,
+            interval=interval,
+            group_by='ticker',
+            threads=True,
+            timeout=15,
+            session=session,
+            progress=False
+        )
         
-    holder.empty()
-    return processed_dict
+        if raw_data.empty: return {}
+
+        # Reconstruct standard schema if scanning a single item
+        if len(tickers) == 1:
+            raw_data.columns = pd.MultiIndex.from_product([[tickers[0]], raw_data.columns])
+
+        processed_dict = {}
+        for ticker in tickers:
+            try:
+                if ticker in raw_data.columns.get_level_values(0):
+                    df = raw_data[ticker].dropna(how='all').copy()
+                    if len(df) >= 20:
+                        resampled = resample_dataframe(df, tf)
+                        if resampled is not None:
+                            processed_dict[ticker] = resampled
+            except: continue
+        return processed_dict
+    except Exception:
+        return {}
 
 # --- CORE STRICT ALGORITHM ENGINE ---
 def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
@@ -254,18 +263,19 @@ def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
 if st.button("🔍 Run Institutional Alignment Scan", type="primary", use_container_width=True):
     results = []
     
-    # 1. SEQUENTIAL DOWNLOAD PHASE (Bypasses the freeze)
-    all_market_data = fetch_safe_sequential_data(symbols_to_scan, timeframe)
+    # 1. ONE-SHOT SECURE NETWORK DOWNLOAD (0.1s processing loop overhead)
+    with st.spinner(f"Requesting data matrix packet for {len(symbols_to_scan)} positions simultaneously..."):
+        all_market_data = fetch_bulletproof_data(symbols_to_scan, timeframe)
     
     if not all_market_data:
-        st.error("Network streaming failed. Please check your internet connection or try again.")
+        st.error("Data matrix request was dropped by server routing limits. Please click scan again.")
     else:
-        # 2. LOCAL CALCULATION PHASE
-        progress_bar = st.progress(0, text="Evaluating institutional zone strictness...")
+        # 2. LOCAL CALCULATION PHASE (Completely disconnected from internet, cannot hang)
+        progress_bar = st.progress(0, text="Executing scanning loops...")
         total_symbols = len(symbols_to_scan)
         
         for idx, ticker in enumerate(symbols_to_scan):
-            progress_bar.progress((idx + 1) / total_symbols, text=f"Analyzing {ticker} Structure ({idx+1}/{total_symbols})...")
+            progress_bar.progress((idx + 1) / total_symbols, text=f"Analyzing {ticker} Local Structure ({idx+1}/{total_symbols})...")
             
             if ticker in all_market_data:
                 res = scan_zones(ticker, all_market_data[ticker], zone_type, base_limit, min_legout, min_legout_size_pct)
