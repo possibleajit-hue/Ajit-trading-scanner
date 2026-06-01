@@ -1,45 +1,34 @@
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
 import os
-from datetime import datetime, timedelta
-from fyers_apiv3 import fyersModel
 
 # --- PAGE CONFIGURATION & UI THEME ---
-st.set_page_config(page_title="Fyers Institutional Sniper v10.0", layout="wide", page_icon="🎯")
+st.set_page_config(page_title="Institutional Sniper Premium v12.0", layout="wide", page_icon="🎯")
 
 st.markdown("""
     <style>
-    .main-title { font-size: 40px; font-weight: 800; color: #00E676; margin-bottom: 0px; letter-spacing: 1px; }
-    .sub-title { font-size: 16px; color: #90A4AE; margin-bottom: 30px; }
+    .main-title { font-size: 38px; font-weight: 800; color: #00E676; margin-bottom: 0px; }
+    .sub-title { font-size: 15px; color: #90A4AE; margin-bottom: 25px; }
     .metric-card { background-color: #1E293B; padding: 15px; border-radius: 10px; border-left: 5px solid #00E676; }
-    .stButton>button { border-radius: 8px; font-weight: 700; letter-spacing: 0.5px; }
+    .stButton>button { border-radius: 8px; font-weight: 700; background-color: #00E676 !important; color: black !important; }
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="main-title">⚡ FYERS REAL-TIME SNIPER SCANNER</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">Fully Automated Token Interception Gateway — High-Speed Live Market Scanner</p>', unsafe_allow_html=True)
-
-# --- AUTOMATIC TOKEN INTERCEPTION ---
-# Streamlit reads its own web URL bar to intercept the token from Fyers automatically!
-fyers_app_id = "6905Y3PB5A-100"
-fyers_secret_id = "FLBIZOXZD2"
-my_streamlit_url = "https://ajit-trading-scanner-nubpmrvxg2ggshwrrqwpk.streamlit.app/"
-
-captured_code = st.query_params.get("code", None)
-if captured_code:
-    st.session_state["fyers_auth_code"] = captured_code
-    st.success("🎯 FYERS Security Access Token intercepted successfully! Connection is live.")
+st.markdown('<p class="main-title">🎯 ONE-CLICK INSTITUTIONAL SCANNER</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-title">Simplified Delivery & Macro Structure Engine (No Broker Login Required)</p>', unsafe_allow_html=True)
 
 # --- LOCAL SECTOR DATA LOADER ---
-@st.cache_data
+@st.cache_data(ttl=86400)
 def load_all_nse_segments():
     segments = {}
     def get_tickers(local_file):
         if os.path.exists(local_file):
             try:
                 df = pd.read_csv(local_file)
-                return df['Symbol'].astype(str).str.strip().tolist()
+                # Append .NS extension for standard Yahoo Finance formatting
+                return (df['Symbol'].astype(str).str.strip() + ".NS").tolist()
             except: pass
         return []
 
@@ -49,7 +38,7 @@ def load_all_nse_segments():
     segments["NIFTY Smallcap 250"] = get_tickers("ind_niftysmallcap250list.csv")
     segments["Full NIFTY 500"] = get_tickers("ind_nifty500list.csv")
     
-    fallback = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "TATAMOTORS", "SBIN", "ITC"]
+    fallback = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "TATAMOTORS.NS", "SBIN.NS", "ITC.NS"]
     for k in list(segments.keys()):
         if not segments[k]: segments[k] = fallback
     return segments
@@ -58,34 +47,19 @@ all_segments = load_all_nse_segments()
 
 # --- SIDEBAR CONTROL PANEL ---
 with st.sidebar:
-    st.header("🔑 Broker Authentication State")
-    
-    if "fyers_auth_code" not in st.session_state:
-        st.warning("Status: Disconnected 🔴")
-        login_url = f"https://api-t1.fyers.in/api/v3/generate-authcode?client_id={fyers_app_id}&redirect_uri={my_streamlit_url}&response_type=code&state=scanner"
-        st.markdown(f'<a href="{login_url}" target="_self" style="background-color:#00E676;color:black;padding:10px 20px;text-decoration:none;border-radius:5px;font-weight:bold;display:inline-block;text-align:center;width:100%;">👉 CLICK HERE TO ACTIVATE SCANNER</a>', unsafe_allow_html=True)
-        st.caption("This will log you into Fyers securely and link back to your app instantly.")
-    else:
-        st.success("Status: Connected 🟢 (Ready All Day)")
-        if st.button("Disconnect App Session"):
-            st.session_state.pop("fyers_auth_code", None)
-            st.rerun()
-
-    st.divider()
     st.header("🎛️ Scanner Settings")
     market_segment = st.selectbox("🎯 Select Market Segment", list(all_segments.keys()))
     scan_range = st.radio("Scan Range", ["Full Segment Scan", "Quick Test (First 5 Stocks)"])
     
     st.divider()
-    tf_display = st.selectbox("⏳ Timeframe Chart", ["15m", "75m", "125m", "1d", "1wk", "1mo", "3mo", "6mo", "1yr"])
-    tf_map = {"15m": "15", "75m": "75", "125m": "125", "1d": "D", "1wk": "W", "1mo": "M", "3mo": "M", "6mo": "M", "1yr": "M"}
-    timeframe = tf_map[tf_display]
+    # PURE DELIVERY & MACRO RESOLUTION ONLY (NO INTRADAY)
+    tf_display = st.selectbox("⏳ Timeframe Chart", ["1D (Daily)", "1W (Weekly)", "1M (Monthly)", "3M (Quarterly)", "6M (Half-Yearly)", "1Y (Yearly)"])
     
     zone_type = st.selectbox("📉 Order Type", ["Bullish Demand Zone", "Bearish Supply Zone"])
     state_filter = st.selectbox("Filter by Zone Condition", ["All Valid Zones", "Just Approaching (Nearing Edge)", "In the Zone (1-6 Candles Formed)", "Unmitigated (100% Completely Fresh)"])
     
     st.divider()
-    st.markdown("### 🕯️ Candle Rules")
+    st.markdown("### 🕯️ Advanced Candle Rules")
     base_limit = st.slider("Max Base Candles Allowed", 1, 6, 4)
     min_legout = st.slider("Min Leg-Out Candles Required", 1, 4, 2)
     min_legout_size_pct = st.slider("Minimum Leg-Out Candle Body Size (%)", 51, 100, 55)
@@ -93,22 +67,18 @@ with st.sidebar:
 base_list = all_segments[market_segment]
 symbols_to_scan = base_list[:5] if "Quick Test" in scan_range else base_list
 
-# --- RESAMPLING PIPELINE ---
+# --- LOCAL CALENDAR MACRO RESAMPLER ---
 def resample_dataframe(df, tf_disp):
     if df.empty or len(df) < 3: return None
-    if tf_disp in ["75m", "125m"]:
-        group_size = 5 if tf_disp == "75m" else 25
-        df['Date'] = df.index.date
-        df['block'] = df.groupby('Date').cumcount() // group_size
-        resampled = df.groupby(['Date', 'block']).agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
-        resampled.index = df.groupby(['Date', 'block']).apply(lambda x: x.index[0])
-        return resampled
-    elif tf_disp in ["3mo", "6mo", "1yr"]:
-        rule = "3M" if tf_disp == "3mo" else ("6M" if tf_disp == "6mo" else "12M")
-        return df.resample(rule).agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}).dropna()
+    if tf_disp == "3M (Quarterly)":
+        return df.resample("3ME").agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}).dropna()
+    elif tf_disp == "6M (Half-Yearly)":
+        return df.resample("6ME").agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}).dropna()
+    elif tf_disp == "1Y (Yearly)":
+        return df.resample("YE").agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}).dropna()
     return df
 
-# --- SCANNING CORE ENGINE ---
+# --- CORE SCANNING ENGINE ---
 def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
     try:
         current_price = round(df['Close'].iloc[-1], 2)
@@ -174,7 +144,7 @@ def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
 
                         if state != "Deeply Mitigated 🔴":
                             matches.append({
-                                "Ticker": ticker, "Formation Date": df.index[legout_start].strftime('%Y-%m-%d'),
+                                "Ticker": ticker.replace('.NS', ''), "Formation Date": df.index[legout_start].strftime('%Y-%m-%d'),
                                 "Leg-Out Count": legout_count, "Leg-Out Strength": f"{round(df['Body_Pct'].iloc[legout_start], 1)}%",
                                 "Base": base_count, "Proximal (Ceiling)": z_ceil, "Distal (Floor)": z_floor,
                                 "Current Price": current_price, "Zone State": state, "Live Alignment": proximity
@@ -184,42 +154,51 @@ def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
         return matches
     except: return None
 
-# --- RUN SCANNER execution ---
-if "fyers_auth_code" in st.session_state:
-    if st.button("🔍 Run Live Institutional Market Scan", type="primary", use_container_width=True):
-        results = []
-        try:
-            fyers = fyersModel.FyersModel(client_id=fyers_app_id, token=st.session_state["fyers_auth_code"], is_async=False, log_path="")
-        except Exception as e:
-            st.error(f"Handshake Expired: Tap the green button to refresh your broker login session. Details: {e}")
-            st.stop()
-        
-        end_date = datetime.now().strftime("%Y-%m-%d")
-        if tf_display in ["15m", "75m", "125m"]:
-            start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
-        elif tf_display in ["3mo", "6mo", "1yr"]:
-            start_date = (datetime.now() - timedelta(days=5475)).strftime("%Y-%m-%d")
-        else:
-            start_date = (datetime.now() - timedelta(days=1825)).strftime("%Y-%m-%d")
+# --- INSTANT RUN ELEMENT ---
+if st.button("⚡ RUN NATIVE LIVE MARKET SCAN", type="primary", use_container_width=True):
+    results = []
+    
+    # Map selection to native parameters
+    if tf_display == "1D (Daily)": period, interval = "3y", "1d"
+    elif tf_display == "1W (Weekly)": period, interval = "5y", "1wk"
+    else: period, interval = "max", "1mo" # Used for 1M, 3M, 6M, and 1Y analytics
 
-        progress_bar = st.progress(0, text="Streaming native price matrices...")
+    with st.spinner(f"Downloading matrix data package for {len(symbols_to_scan)} charts simultaneously..."):
+        try:
+            raw_data = yf.download(
+                tickers=symbols_to_scan,
+                period=period,
+                interval=interval,
+                group_by='ticker',
+                threads=True,
+                progress=False,
+                timeout=15
+            )
+        except Exception as e:
+            st.error(f"Data stream connection interrupted. Please try clicking the button again. Info: {e}")
+            st.stop()
+
+    if raw_data.empty:
+        st.error("Data matrix came back blank from the exchange. Please tap scan again.")
+    else:
+        # Re-index single ticker inputs to match MultiIndex matrix standard
+        if len(symbols_to_scan) == 1:
+            raw_data.columns = pd.MultiIndex.from_product([[symbols_to_scan[0]], raw_data.columns])
+
+        progress_bar = st.progress(0, text="Analyzing downloaded chart parameters locally...")
         total_symbols = len(symbols_to_scan)
         
-        for idx, symbol in enumerate(symbols_to_scan):
-            progress_bar.progress((idx + 1) / total_symbols, text=f"Scanning {symbol} ({idx+1}/{total_symbols})...")
-            try:
-                response = fyers.history(data={"symbol": f"NSE:{symbol}-EQ", "resolution": timeframe, "date_format": "1", "range_from": start_date, "range_to": end_date, "cont_flag": "1"})
-                if response and response.get('s') == 'ok' and response.get('candles'):
-                    df = pd.DataFrame(response['candles'], columns=['Timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
-                    df['Timestamp'] = pd.to_datetime(df['Timestamp'], unit='s').dt.tz_localize('UTC').dt.tz_convert('Asia/Kolkata')
-                    df.set_index('Timestamp', inplace=True)
-                    
+        for idx, ticker in enumerate(symbols_to_scan):
+            progress_bar.progress((idx + 1) / total_symbols, text=f"Analyzing {ticker.replace('.NS','')} Local Data...")
+            
+            if ticker in raw_data.columns.get_level_values(0):
+                df = raw_data[ticker].dropna(how='all').copy()
+                if len(df) >= 5:
                     processed_df = resample_dataframe(df, tf_display)
                     if processed_df is not None and not processed_df.empty:
-                        res = scan_zones(symbol, processed_df, zone_type, base_limit, min_legout, min_legout_size_pct)
+                        res = scan_zones(ticker, processed_df, zone_type, base_limit, min_legout, min_legout_size_pct)
                         if res: results.extend(res)
-            except: continue
-            
+                        
         progress_bar.empty()
         
         if results:
@@ -228,11 +207,9 @@ if "fyers_auth_code" in st.session_state:
             elif state_filter == "In the Zone (1-6 Candles Formed)": df_display = df_display[df_display['Zone State'] == "In the Zone (1-6 Candles) 🟡"]
             elif state_filter == "Unmitigated (100% Completely Fresh)": df_display = df_display[df_display['Zone State'] == "Unmitigated 🟢"]
             
-            if df_display.empty: st.warning("No live levels match your advanced criteria filter right now.")
+            if df_display.empty: st.warning("No active institutional zones match your exact state selection right now.")
             else:
-                st.markdown(f"### 📈 Live Institutional Setup Ledger ({len(df_display)} Found)")
+                st.markdown(f"### 📈 Real-Time Setup Matrix ({len(df_display)} Positions Uncovered)")
                 st.dataframe(df_display, use_container_width=True, hide_index=True)
         else:
-            st.warning("No institutional zones detected in this current segment snapshot.")
-else:
-    st.info("💡 App Idle: Complete your 1-click login activation button on the sidebar to display the main action interface.")
+            st.warning("No institutional setups detected matching these current parameters.")
