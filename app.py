@@ -81,8 +81,14 @@ with st.sidebar:
     base_limit = st.slider("Max Base Candles Allowed", 1, 6, 4)
     min_legout = st.slider("Min Leg-Out Candles Required", 1, 4, 1)
     
-    # NEW REQUESTED CUSTOMIZABLE DYNAMIC LEGOUT SIZE SLIDER
-    legout_size_pct = st.slider("Leg-Out Candle Body Size (%)", 51, 100, 55, help="What percentage of the entire candle length must be the solid candle body? Higher = more powerful institutional volume break.")
+    # ENHANCED AND EXPLICIT MINIMUM LEGOUT SIZE FILTER
+    min_legout_size_pct = st.slider(
+        "Minimum Leg-Out Candle Body Size (%)", 
+        min_value=51, 
+        max_value=100, 
+        value=55, 
+        help="Filters the momentum shift. Specifies the minimum percentage of the absolute candle height (High to Low) that must consist of the real candle body (Open to Close)."
+    )
 
 base_list = all_segments[market_segment]
 symbols_to_scan = base_list[:5] if "Quick Test" in scan_range else base_list
@@ -112,7 +118,7 @@ def fetch_and_resample(ticker, tf):
         return t.history(period='10y', interval=tf, timeout=1.5)
 
 # --- CORE ALGORITHM ENGINE ---
-def scan_zones(ticker, tf, mode, max_base, min_leg, size_threshold):
+def scan_zones(ticker, tf, mode, max_base, min_leg, min_size_threshold):
     try:
         df = fetch_and_resample(ticker, tf)
         if df is None or len(df) < 20: return None
@@ -124,8 +130,8 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, size_threshold):
         
         df['Is_Base'] = df['Body'] < (0.5 * df['Range'])
         
-        # INTEGRATED THE DYNAMIC LEGOUT FILTER RATIO
-        ratio_threshold = size_threshold / 100.0
+        # IMPLEMENTING THE MINIMUM BODY SIZE FILTER
+        ratio_threshold = min_size_threshold / 100.0
         if mode == "Bullish Demand Zone":
             df['Is_Strong'] = (df['Close'] > df['Open']) & (df['Body'] >= ratio_threshold * df['Range'])
         else:
@@ -232,8 +238,7 @@ if st.button("🔍 Run Institutional Alignment Scan", type="primary", use_contai
         progress_bar.progress((idx + 1) / total_symbols, text=f"Analyzing {ticker} Structure ({idx+1}/{total_symbols})...")
         time.sleep(0.01)
         
-        # Passed legout_size_pct directly into parameters
-        res = scan_zones(ticker, timeframe, zone_type, base_limit, min_legout, legout_size_pct)
+        res = scan_zones(ticker, timeframe, zone_type, base_limit, min_legout, min_legout_size_pct)
         if res:
             results.extend(res)
             
