@@ -116,20 +116,14 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, min_size_threshold):
         
         current_price = round(df['Close'].iloc[-1], 2)
         
-        # STRICT MATHEMATICAL PERCENTAGE CALCULATION
         df['Body'] = (df['Close'] - df['Open']).abs()
         df['Range'] = df['High'] - df['Low']
-        
-        # Prevent division by zero errors which cause false flags
         df['Range'] = np.where(df['Range'] == 0, 0.0001, df['Range'])
         
-        # Calculate the precise body percentage
         df['Body_Pct'] = (df['Body'] / df['Range']) * 100.0
         
-        # 1. STRICT BASE DEFINITION (< 50%)
         df['Is_Base'] = df['Body_Pct'] < 50.0
         
-        # 2. STRICT LEG-OUT DEFINITION (>= User Slider %)
         if mode == "Bullish Demand Zone":
             df['Is_Strong'] = (df['Close'] > df['Open']) & (df['Body_Pct'] >= float(min_size_threshold))
         else:
@@ -138,33 +132,25 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, min_size_threshold):
         matches = []
         i = 1
         while i < len(df) - min_leg - 1:
-            # Found a Boring Candle
             if df['Is_Base'].iloc[i]:
                 base_start = i
                 base_end = i
                 
-                # Consume all consecutive boring candles
                 while base_end + 1 < len(df) and df['Is_Base'].iloc[base_end + 1]:
                     base_end += 1
                 
                 base_count = base_end - base_start + 1
                 
-                # Check if base count is within allowed limit
                 if base_count <= max_base:
                     legout_start = base_end + 1
                     legout_count = 0
                     
-                    # Consume consecutive strong candles
                     while legout_start + legout_count < len(df) and df['Is_Strong'].iloc[legout_start + legout_count]:
-                        
-                        # DOUBLE LOCK SAFETY CHECK: Mathematically verify the legout candle again
                         actual_body_pct = df['Body_Pct'].iloc[legout_start + legout_count]
                         if actual_body_pct < min_size_threshold:
-                            break # Hard fail, exit loop immediately
-                            
+                            break 
                         legout_count += 1
                         
-                    # If we found enough valid leg-outs
                     if legout_count >= min_leg:
                         future_data = df.iloc[legout_start + legout_count :]
                         
@@ -221,13 +207,13 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, min_size_threshold):
                                 proximity = "Normal"
 
                         date_detected = df.index[legout_start].strftime('%Y-%m-%d %H:%M') if hasattr(df.index[legout_start], 'strftime') else str(df.index[legout_start])
-                        
-                        # Grab the actual body percentage of the first leg-out for display
                         first_legout_pct = df['Body_Pct'].iloc[legout_start]
                         
+                        # NEW COLUMN ADDED HERE
                         matches.append({
                             "Ticker": ticker.replace('.NS', ''),
                             "Formation Date": date_detected,
+                            "Leg-Out Count": legout_count,
                             "Leg-Out Strength": f"{round(first_legout_pct, 1)}%",
                             "Base": base_count,
                             "Proximal (Ceiling)": z_ceil,
@@ -236,7 +222,6 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, min_size_threshold):
                             "Zone State": state,
                             "Live Alignment": proximity
                         })
-                # Skip past the base to continue scanning correctly
                 i = base_end + 1
             else:
                 i += 1
