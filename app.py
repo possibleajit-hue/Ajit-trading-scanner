@@ -3,9 +3,12 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import time
+import requests
+import io
+import os
 
 # --- PAGE CONFIGURATION & UI THEME ---
-st.set_page_config(page_title="Institutional Sniper v4.0", layout="wide", page_icon="🎯")
+st.set_page_config(page_title="Institutional Sniper v5.0", layout="wide", page_icon="🎯")
 
 st.markdown("""
     <style>
@@ -16,26 +19,42 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="main-title">⚡ INSTITUTIONAL SNIPER ENGINE v4.0</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">Controlled Safe-Batching Architecture (Bypasses Server Blocks)</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-title">⚡ INSTITUTIONAL SNIPER ENGINE v5.0</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-title">Anti-Deadlock Sequential Engine & Browser-Spoofing Data Loader</p>', unsafe_allow_html=True)
 
-# --- LOCAL SECTOR DATA LOADER ---
-@st.cache_data
+# --- BULLETPROOF SECTOR DATA LOADER ---
+@st.cache_data(ttl=86400)
 def load_all_nse_segments():
     segments = {}
-    def format_tickers(filepath):
+    
+    # Disguise the app as a standard Google Chrome browser to bypass NSE blocks
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    def get_tickers(url, local_file):
+        # Method 1: Try to read the local CSV if you uploaded it successfully
+        if os.path.exists(local_file):
+            try:
+                df = pd.read_csv(local_file)
+                return (df['Symbol'].astype(str).str.strip() + ".NS").tolist()
+            except: pass
+            
+        # Method 2: If no local file, spoof a web browser and download it live
         try:
-            df = pd.read_csv(filepath)
+            res = requests.get(url, headers=headers, timeout=5)
+            df = pd.read_csv(io.StringIO(res.text))
             return (df['Symbol'].astype(str).str.strip() + ".NS").tolist()
         except:
             return []
 
-    segments["NIFTY 50 (Mega Cap)"] = format_tickers("ind_nifty50list.csv")
-    segments["NIFTY 100 (Large Cap)"] = format_tickers("ind_nifty100list.csv")
-    segments["NIFTY Midcap 100"] = format_tickers("ind_niftymidcap100list.csv")
-    segments["NIFTY Smallcap 250"] = format_tickers("ind_niftysmallcap250list.csv")
-    segments["Full NIFTY 500"] = format_tickers("ind_nifty500list.csv")
+    segments["NIFTY 50 (Mega Cap)"] = get_tickers("https://archives.nseindia.com/content/indices/ind_nifty50list.csv", "ind_nifty50list.csv")
+    segments["NIFTY 100 (Large Cap)"] = get_tickers("https://archives.nseindia.com/content/indices/ind_nifty100list.csv", "ind_nifty100list.csv")
+    segments["NIFTY Midcap 100"] = get_tickers("https://archives.nseindia.com/content/indices/ind_niftymidcap100list.csv", "ind_niftymidcap100list.csv")
+    segments["NIFTY Smallcap 250"] = get_tickers("https://archives.nseindia.com/content/indices/ind_niftysmallcap250list.csv", "ind_niftysmallcap250list.csv")
+    segments["Full NIFTY 500"] = get_tickers("https://archives.nseindia.com/content/indices/ind_nifty500list.csv", "ind_nifty500list.csv")
     
+    # Method 3: Ultimate Fallback just in case everything fails
     fallback = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "TATAMOTORS.NS", "SBIN.NS", "ITC.NS"]
     for k in list(segments.keys()):
         if not segments[k]:
@@ -100,9 +119,9 @@ def resample_dataframe(df, tf):
         return resampled
     return df
 
-# --- SAFE SYSTEM BATCH DOWNLOADER ---
+# --- ANTI-DEADLOCK SEQUENTIAL DOWNLOADER ---
 @st.cache_data(ttl=600)
-def fetch_safe_batch_data(tickers, tf):
+def fetch_safe_sequential_data(tickers, tf):
     if tf in ["15m", "75m", "125m"]:
         period, interval = '60d', '15m' if tf != "125m" else '5m'
     elif tf in ["1d", "1wk"]:
@@ -111,36 +130,22 @@ def fetch_safe_batch_data(tickers, tf):
         period, interval = '10y', tf
 
     processed_dict = {}
-    batch_size = 5 # Small, highly secure batch size to stay under the radar
-    
-    # Progress visualization container
     holder = st.empty()
     
-    for idx in range(0, len(tickers), batch_size):
-        chunk = tickers[idx:idx + batch_size]
-        holder.info(f"Downloading Batch {int(idx/batch_size)+1} of {int(np.ceil(len(tickers)/batch_size))}...")
-        
+    # We loop through ONE by ONE to ensure Yahoo Finance never freezes the connection
+    for i, ticker in enumerate(tickers):
+        holder.info(f"Downloading historical data for {ticker} ({i+1}/{len(tickers)})...")
         try:
-            # Download small cluster safely
-            raw_chunk = yf.download(chunk, period=period, interval=interval, group_by='ticker', threads=True, timeout=10, progress=False)
+            t = yf.Ticker(ticker)
+            df = t.history(period=period, interval=interval, timeout=3)
+            if not df.empty and len(df) >= 20:
+                resampled = resample_dataframe(df, tf)
+                if resampled is not None:
+                    processed_dict[ticker] = resampled
+        except Exception:
+            pass # Silently skip broken tickers instead of freezing
             
-            for ticker in chunk:
-                try:
-                    if len(chunk) == 1:
-                        df = raw_chunk.dropna(how='all').copy()
-                    else:
-                        df = raw_chunk[ticker].dropna(how='all').copy()
-                        
-                    if not df.empty and len(df) >= 20:
-                        processed_df = resample_dataframe(df, tf)
-                        if processed_df is not None:
-                            processed_dict[ticker] = processed_df
-                except:
-                    continue
-        except:
-            pass
-            
-        time.sleep(0.4) # Crucial anti-ban breath between server calls
+        time.sleep(0.1) # A tiny breathing pause to respect Yahoo's servers
         
     holder.empty()
     return processed_dict
@@ -249,13 +254,13 @@ def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
 if st.button("🔍 Run Institutional Alignment Scan", type="primary", use_container_width=True):
     results = []
     
-    # 1. CONTROLLED CHUNK DOWNLOAD
-    all_market_data = fetch_safe_batch_data(symbols_to_scan, timeframe)
+    # 1. SEQUENTIAL DOWNLOAD PHASE (Bypasses the freeze)
+    all_market_data = fetch_safe_sequential_data(symbols_to_scan, timeframe)
     
     if not all_market_data:
-        st.error("Data streaming was blocked by the host server. Please wait 10 seconds and tap scan again.")
+        st.error("Network streaming failed. Please check your internet connection or try again.")
     else:
-        # 2. LOCAL CALCULATION PHASE (Instantaneous)
+        # 2. LOCAL CALCULATION PHASE
         progress_bar = st.progress(0, text="Evaluating institutional zone strictness...")
         total_symbols = len(symbols_to_scan)
         
