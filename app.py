@@ -1,19 +1,12 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import numpy as np
-import time
-import requests
-import io
 import os
-import socket
-
-# --- THE LIFESAVER: GLOBAL LOW-LEVEL SOCKET TIMEOUT ---
-# This forces the entire Python language to kill any network hang after 3 seconds flat.
-socket.setdefaulttimeout(3.0)
+from datetime import datetime, timedelta
+from fyers_apiv3 import fyersModel
 
 # --- PAGE CONFIGURATION & UI THEME ---
-st.set_page_config(page_title="Institutional Sniper v7.0", layout="wide", page_icon="🎯")
+st.set_page_config(page_title="Fyers Institutional Sniper v7.0", layout="wide", page_icon="🎯")
 
 st.markdown("""
     <style>
@@ -24,18 +17,18 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="main-title">⚡ INSTITUTIONAL SNIPER ENGINE v7.0</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">Un-Hangable Low-Level Socket Shield Architecture</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-title">⚡ FYERS INSTITUTIONAL SNIPER v7.0</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-title">Broker API Powered High-Speed Custom Timeframe Scanner</p>', unsafe_allow_html=True)
 
 # --- LOCAL SECTOR DATA LOADER ---
-@st.cache_data(ttl=86400)
+@st.cache_data
 def load_all_nse_segments():
     segments = {}
     def get_tickers(local_file):
         if os.path.exists(local_file):
             try:
                 df = pd.read_csv(local_file)
-                return (df['Symbol'].astype(str).str.strip() + ".NS").tolist()
+                return df['Symbol'].astype(str).str.strip().tolist()
             except: pass
         return []
 
@@ -45,7 +38,7 @@ def load_all_nse_segments():
     segments["NIFTY Smallcap 250"] = get_tickers("ind_niftysmallcap250list.csv")
     segments["Full NIFTY 500"] = get_tickers("ind_nifty500list.csv")
     
-    fallback = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "TATAMOTORS.NS", "SBIN.NS", "ITC.NS"]
+    fallback = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "TATAMOTORS", "SBIN", "ITC"]
     for k in list(segments.keys()):
         if not segments[k]:
             segments[k] = fallback
@@ -55,23 +48,32 @@ all_segments = load_all_nse_segments()
 
 # --- SIDEBAR CONTROL PANEL ---
 with st.sidebar:
+    st.header("🔑 Fyers API Authentication")
+    
+    # 1. Permanent Keys
+    fyers_app_id = st.text_input("Fyers App ID (Client ID)", value="6905Y3PB5A-100", type="password")
+    fyers_secret_id = st.text_input("Fyers Secret ID", value="FLBIZOXZD2", type="password")
+    redirect_uri = "https://trade.fyers.in/"
+    
+    st.divider()
+    st.markdown("### ☀️ Morning Activation")
+    
+    # Generate the login link dynamically
+    login_url = f"https://api-t1.fyers.in/api/v3/generate-authcode?client_id={fyers_app_id}&redirect_uri={redirect_uri}&response_type=code&state=scanner"
+    st.markdown(f'[👉 **Step 1: Click Here to Login & Get Code**]({login_url})')
+    
+    auth_code = st.text_input("Step 2: Paste the 'code' from URL here", type="password")
+    
+    st.divider()
     st.header("🎛️ Strategic Controls")
     market_segment = st.selectbox("🎯 Select Market Segment", list(all_segments.keys()))
     scan_range = st.radio("Scan Target Length", ["Full Segment Scan", "Quick Test (First 5 Stocks)"])
     
     st.divider()
-    st.markdown("### 📈 Trading Profile Pre-sets")
-    profile = st.selectbox("Choose Profile", ["Custom", "Intraday Trading", "Swing Trading", "Long-Term Investing"])
+    tf_display = st.selectbox("⏳ Native Resolution Timeframe", ["15m", "75m", "125m", "1d", "1wk", "1mo"])
+    tf_map = {"15m": "15", "75m": "75", "125m": "125", "1d": "D", "1wk": "W", "1mo": "M"}
+    timeframe = tf_map[tf_display]
     
-    if profile == "Intraday Trading":
-        timeframe = st.selectbox("⏳ Timeframe", ["15m", "75m", "125m"])
-    elif profile == "Swing Trading":
-        timeframe = st.selectbox("⏳ Timeframe", ["1d", "1wk"])
-    elif profile == "Long-Term Investing":
-        timeframe = st.selectbox("⏳ Timeframe", ["1wk", "1mo", "3mo"])
-    else:
-        timeframe = st.selectbox("⏳ Timeframe", ["15m", "75m", "125m", "1d", "1wk", "1mo", "3mo"])
-        
     zone_type = st.selectbox("📉 Order Type", ["Bullish Demand Zone", "Bearish Supply Zone"])
     
     st.divider()
@@ -91,22 +93,6 @@ with st.sidebar:
 
 base_list = all_segments[market_segment]
 symbols_to_scan = base_list[:5] if "Quick Test" in scan_range else base_list
-
-# --- RESAMPLING HELPER ---
-def resample_dataframe(df, tf):
-    if len(df) < 20: return None
-    if tf in ["75m", "125m"]:
-        group_size = 5 if tf == "75m" else 25
-        df['Date'] = df.index.date
-        df['block'] = df.groupby('Date').cumcount() // group_size
-        
-        resampled = df.groupby(['Date', 'block']).agg({
-            'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'
-        }).dropna()
-        
-        resampled.index = df.groupby(['Date', 'block']).apply(lambda x: x.index[0])
-        return resampled
-    return df
 
 # --- CORE STRICT ALGORITHM ENGINE ---
 def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
@@ -188,9 +174,9 @@ def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
                             proximity = "Just Approaching 🎯" if state == "Unmitigated 🟢" and (z_floor * 0.985 <= current_price < z_floor) else ("Inside Zone ⚡" if "In the Zone" in state else "Normal")
 
                         if state != "Deeply Mitigated 🔴":
-                            date_detected = df.index[legout_start].strftime('%Y-%m-%d %H:%M') if hasattr(df.index[legout_start], 'strftime') else str(df.index[legout_start])
+                            date_detected = df.index[legout_start].strftime('%Y-%m-%d %H:%M')
                             matches.append({
-                                "Ticker": ticker.replace('.NS', ''),
+                                "Ticker": ticker,
                                 "Formation Date": date_detected,
                                 "Leg-Out Count": legout_count,
                                 "Leg-Out Strength": f"{round(df['Body_Pct'].iloc[legout_start], 1)}%",
@@ -209,74 +195,101 @@ def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
         return None
 
 # --- SCANNER RUNNER EXECUTION ---
-if st.button("🔍 Run Institutional Alignment Scan", type="primary", use_container_width=True):
-    results = []
-    
-    if timeframe in ["15m", "75m", "125m"]:
-        period, interval = '60d', '15m' if timeframe != "125m" else '5m'
-    elif timeframe in ["1d", "1wk"]:
-        period, interval = '3y', timeframe
+if st.button("🔍 Run FYERS Institutional Scan", type="primary", use_container_width=True):
+    if not auth_code:
+        st.error("Authentication Error: Please complete Step 1 and Step 2 in the sidebar to retrieve your morning authorization code.")
     else:
-        period, interval = '10y', timeframe
-
-    progress_bar = st.progress(0, text="Connecting to chart streams...")
-    total_symbols = len(symbols_to_scan)
-    
-    # RUNNING SEQUENTIAL DISCONNECTED SCAN WITH TIMEOUT OVERRIDES
-    for idx, ticker in enumerate(symbols_to_scan):
-        progress_bar.progress((idx + 1) / total_symbols, text=f"Scanning {ticker} ({idx+1}/{total_symbols})...")
+        results = []
         
+        # AUTOMATICALLY EXCHANGE AUTH CODE FOR ACCESS TOKEN
         try:
-            # Low-level protected request block
-            t = yf.Ticker(ticker)
-            df = t.history(period=period, interval=interval)
+            session_model = fyersModel.SessionModel(
+                client_id=fyers_app_id,
+                secret_key=fyers_secret_id,
+                redirect_uri=redirect_uri,
+                response_type='code',
+                grant_type='authorization_code'
+            )
+            session_model.set_token(auth_code)
+            token_response = session_model.generate_token()
+            access_token = token_response.get("access_token")
             
-            if df is not None and not df.empty and len(df) >= 20:
-                resampled_df = resample_dataframe(df, timeframe)
-                if resampled_df is not None:
-                    res = scan_zones(ticker, resampled_df, zone_type, base_limit, min_legout, min_legout_size_pct)
+            fyers = fyersModel.FyersModel(client_id=fyers_app_id, token=access_token, is_async=False, log_path="")
+        except Exception as e:
+            st.error(f"Fyers Handshake Failed: Ensure your Auth Code is fresh. Details: {e}")
+            st.stop()
+        
+        end_date = datetime.now().strftime("%Y-%m-%d")
+        if timeframe in ["15", "75", "125"]:
+            start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+        else:
+            start_date = (datetime.now() - timedelta(days=730)).strftime("%Y-%m-%d")
+
+        progress_bar = st.progress(0, text="Streaming native arrays from FYERS production data vaults...")
+        total_symbols = len(symbols_to_scan)
+        
+        for idx, symbol in enumerate(symbols_to_scan):
+            fyers_symbol = f"NSE:{symbol}-EQ"
+            progress_bar.progress((idx + 1) / total_symbols, text=f"Scanning {symbol} ({idx+1}/{total_symbols})...")
+            
+            try:
+                data = {
+                    "symbol": fyers_symbol,
+                    "resolution": timeframe,
+                    "date_format": "1",
+                    "range_from": start_date,
+                    "range_to": end_date,
+                    "cont_flag": "1"
+                }
+                
+                response = fyers.history(data=data)
+                
+                if response and response.get('s') == 'ok' and response.get('candles'):
+                    df = pd.DataFrame(response['candles'], columns=['Timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
+                    df['Timestamp'] = pd.to_datetime(df['Timestamp'], unit='s').dt.tz_localize('UTC').dt.tz_convert('Asia/Kolkata')
+                    df.set_index('Timestamp', inplace=True)
+                    
+                    res = scan_zones(symbol, df, zone_type, base_limit, min_legout, min_legout_size_pct)
                     if res:
                         results.extend(res)
-        except Exception:
-            # If Yahoo Finance tries to hang the system, the socket timeout fires, 
-            # breaks the connection, and forces code to skip here safely instead of freezing!
-            continue
-            
-    progress_bar.empty()
-    
-    if results:
-        df_display = pd.DataFrame(results)
-        df_display = df_display.sort_values(by="Formation Date", ascending=False).drop_duplicates(subset=["Ticker"], keep="first")
+            except Exception:
+                continue
+                
+        progress_bar.empty()
         
-        if state_filter == "Just Approaching (Nearing Edge)":
-            df_display = df_display[df_display['Live Alignment'] == "Just Approaching 🎯"]
-        elif state_filter == "In the Zone (1-6 Candles Formed)":
-            df_display = df_display[df_display['Zone State'] == "In the Zone (1-6 Candles) 🟡"]
-        elif state_filter == "Unmitigated (100% Completely Fresh)":
-            df_display = df_display[df_display['Zone State'] == "Unmitigated 🟢"]
+        if results:
+            df_display = pd.DataFrame(results)
+            df_display = df_display.sort_values(by="Formation Date", ascending=False).drop_duplicates(subset=["Ticker"], keep="first")
             
-        if df_display.empty:
-            st.warning("No institutional zones matched your exact state filter conditions at this moment.")
+            if state_filter == "Just Approaching (Nearing Edge)":
+                df_display = df_display[df_display['Live Alignment'] == "Just Approaching 🎯"]
+            elif state_filter == "In the Zone (1-6 Candles Formed)":
+                df_display = df_display[df_display['Zone State'] == "In the Zone (1-6 Candles) 🟡"]
+            elif state_filter == "Unmitigated (100% Completely Fresh)":
+                df_display = df_display[df_display['Zone State'] == "Unmitigated 🟢"]
+                
+            if df_display.empty:
+                st.warning("No institutional zones matched your exact state filter conditions at this moment.")
+            else:
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.markdown(f"<div class='metric-card'><b>Total Formations:</b><br><span style='font-size:24px;'>{len(df_display)}</span></div>", unsafe_allow_html=True)
+                with c2:
+                    st.markdown(f"<div class='metric-card' style='border-left-color:#00E676;'><b>100% Unmitigated:</b><br><span style='font-size:24px;'>{len(df_display[df_display['Zone State'] == 'Unmitigated 🟢'])}</span></div>", unsafe_allow_html=True)
+                with c3:
+                    st.markdown(f"<div class='metric-card' style='border-left-color:#FFD600;'><b>Active Plays:</b><br><span style='font-size:24px;'>{len(df_display[df_display['Live Alignment'] != 'Normal'])}</span></div>", unsafe_allow_html=True)
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                def highlight_live_state(val):
+                    if "Approaching" in str(val): return 'background-color: #1B5E20; color: white;'
+                    if "Inside" in str(val): return 'background-color: #E65100; color: white;'
+                    return ''
+                    
+                st.dataframe(
+                    df_display.style.map(highlight_live_state, subset=['Live Alignment']),
+                    use_container_width=True,
+                    hide_index=True
+                )
         else:
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.markdown(f"<div class='metric-card'><b>Total Formations:</b><br><span style='font-size:24px;'>{len(df_display)}</span></div>", unsafe_allow_html=True)
-            with c2:
-                st.markdown(f"<div class='metric-card' style='border-left-color:#00E676;'><b>100% Unmitigated:</b><br><span style='font-size:24px;'>{len(df_display[df_display['Zone State'] == 'Unmitigated 🟢'])}</span></div>", unsafe_allow_html=True)
-            with c3:
-                st.markdown(f"<div class='metric-card' style='border-left-color:#FFD600;'><b>Active Plays:</b><br><span style='font-size:24px;'>{len(df_display[df_display['Live Alignment'] != 'Normal'])}</span></div>", unsafe_allow_html=True)
-                
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            def highlight_live_state(val):
-                if "Approaching" in str(val): return 'background-color: #1B5E20; color: white;'
-                if "Inside" in str(val): return 'background-color: #E65100; color: white;'
-                return ''
-                
-            st.dataframe(
-                df_display.style.map(highlight_live_state, subset=['Live Alignment']),
-                use_container_width=True,
-                hide_index=True
-            )
-    else:
-        st.warning("No institutional setups detected matching these settings within the downloaded parameters.")
+            st.warning("No institutional setups detected matching these settings within the downloaded parameters.")
