@@ -6,9 +6,14 @@ import time
 import requests
 import io
 import os
+import socket
+
+# --- THE LIFESAVER: GLOBAL LOW-LEVEL SOCKET TIMEOUT ---
+# This forces the entire Python language to kill any network hang after 3 seconds flat.
+socket.setdefaulttimeout(3.0)
 
 # --- PAGE CONFIGURATION & UI THEME ---
-st.set_page_config(page_title="Institutional Sniper v6.0", layout="wide", page_icon="🎯")
+st.set_page_config(page_title="Institutional Sniper v7.0", layout="wide", page_icon="🎯")
 
 st.markdown("""
     <style>
@@ -19,39 +24,26 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="main-title">⚡ INSTITUTIONAL SNIPER ENGINE v6.0</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">Single-Shot Batch Architecture & Cloud Anti-Throttling Engine</p>', unsafe_allow_html=True)
-
-# --- BROWSER INTERFACE SPOOFING SETUP ---
-session = requests.Session()
-session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-})
+st.markdown('<p class="main-title">⚡ INSTITUTIONAL SNIPER ENGINE v7.0</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-title">Un-Hangable Low-Level Socket Shield Architecture</p>', unsafe_allow_html=True)
 
 # --- LOCAL SECTOR DATA LOADER ---
 @st.cache_data(ttl=86400)
 def load_all_nse_segments():
     segments = {}
-    def get_tickers(url, local_file):
+    def get_tickers(local_file):
         if os.path.exists(local_file):
             try:
                 df = pd.read_csv(local_file)
                 return (df['Symbol'].astype(str).str.strip() + ".NS").tolist()
             except: pass
-        try:
-            res = session.get(url, timeout=5)
-            df = pd.read_csv(io.StringIO(res.text))
-            return (df['Symbol'].astype(str).str.strip() + ".NS").tolist()
-        except:
-            return []
+        return []
 
-    segments["NIFTY 50 (Mega Cap)"] = get_tickers("https://archives.nseindia.com/content/indices/ind_nifty50list.csv", "ind_nifty50list.csv")
-    segments["NIFTY 100 (Large Cap)"] = get_tickers("https://archives.nseindia.com/content/indices/ind_nifty100list.csv", "ind_nifty100list.csv")
-    segments["NIFTY Midcap 100"] = get_tickers("https://archives.nseindia.com/content/indices/ind_niftymidcap100list.csv", "ind_niftymidcap100list.csv")
-    segments["NIFTY Smallcap 250"] = get_tickers("https://archives.nseindia.com/content/indices/ind_niftysmallcap250list.csv", "ind_niftysmallcap250list.csv")
-    segments["Full NIFTY 500"] = get_tickers("https://archives.nseindia.com/content/indices/ind_nifty500list.csv", "ind_nifty500list.csv")
+    segments["NIFTY 50 (Mega Cap)"] = get_tickers("ind_nifty50list.csv")
+    segments["NIFTY 100 (Large Cap)"] = get_tickers("ind_nifty100list.csv")
+    segments["NIFTY Midcap 100"] = get_tickers("ind_niftymidcap100list.csv")
+    segments["NIFTY Smallcap 250"] = get_tickers("ind_niftysmallcap250list.csv")
+    segments["Full NIFTY 500"] = get_tickers("ind_nifty500list.csv")
     
     fallback = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "TATAMOTORS.NS", "SBIN.NS", "ITC.NS"]
     for k in list(segments.keys()):
@@ -115,49 +107,6 @@ def resample_dataframe(df, tf):
         resampled.index = df.groupby(['Date', 'block']).apply(lambda x: x.index[0])
         return resampled
     return df
-
-# --- ANTI-BLOCK SINGLE-SHOT DOWNLOADER ---
-@st.cache_data(ttl=300)
-def fetch_bulletproof_data(tickers, tf):
-    if tf in ["15m", "75m", "125m"]:
-        period, interval = '60d', '15m' if tf != "125m" else '5m'
-    elif tf in ["1d", "1wk"]:
-        period, interval = '3y', tf
-    else:
-        period, interval = '10y', tf
-
-    try:
-        # Pull everything instantly in a single network pass with browser signatures
-        raw_data = yf.download(
-            tickers=tickers,
-            period=period,
-            interval=interval,
-            group_by='ticker',
-            threads=True,
-            timeout=15,
-            session=session,
-            progress=False
-        )
-        
-        if raw_data.empty: return {}
-
-        # Reconstruct standard schema if scanning a single item
-        if len(tickers) == 1:
-            raw_data.columns = pd.MultiIndex.from_product([[tickers[0]], raw_data.columns])
-
-        processed_dict = {}
-        for ticker in tickers:
-            try:
-                if ticker in raw_data.columns.get_level_values(0):
-                    df = raw_data[ticker].dropna(how='all').copy()
-                    if len(df) >= 20:
-                        resampled = resample_dataframe(df, tf)
-                        if resampled is not None:
-                            processed_dict[ticker] = resampled
-            except: continue
-        return processed_dict
-    except Exception:
-        return {}
 
 # --- CORE STRICT ALGORITHM ENGINE ---
 def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
@@ -263,60 +212,71 @@ def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
 if st.button("🔍 Run Institutional Alignment Scan", type="primary", use_container_width=True):
     results = []
     
-    # 1. ONE-SHOT SECURE NETWORK DOWNLOAD (0.1s processing loop overhead)
-    with st.spinner(f"Requesting data matrix packet for {len(symbols_to_scan)} positions simultaneously..."):
-        all_market_data = fetch_bulletproof_data(symbols_to_scan, timeframe)
-    
-    if not all_market_data:
-        st.error("Data matrix request was dropped by server routing limits. Please click scan again.")
+    if timeframe in ["15m", "75m", "125m"]:
+        period, interval = '60d', '15m' if timeframe != "125m" else '5m'
+    elif timeframe in ["1d", "1wk"]:
+        period, interval = '3y', timeframe
     else:
-        # 2. LOCAL CALCULATION PHASE (Completely disconnected from internet, cannot hang)
-        progress_bar = st.progress(0, text="Executing scanning loops...")
-        total_symbols = len(symbols_to_scan)
+        period, interval = '10y', timeframe
+
+    progress_bar = st.progress(0, text="Connecting to chart streams...")
+    total_symbols = len(symbols_to_scan)
+    
+    # RUNNING SEQUENTIAL DISCONNECTED SCAN WITH TIMEOUT OVERRIDES
+    for idx, ticker in enumerate(symbols_to_scan):
+        progress_bar.progress((idx + 1) / total_symbols, text=f"Scanning {ticker} ({idx+1}/{total_symbols})...")
         
-        for idx, ticker in enumerate(symbols_to_scan):
-            progress_bar.progress((idx + 1) / total_symbols, text=f"Analyzing {ticker} Local Structure ({idx+1}/{total_symbols})...")
+        try:
+            # Low-level protected request block
+            t = yf.Ticker(ticker)
+            df = t.history(period=period, interval=interval)
             
-            if ticker in all_market_data:
-                res = scan_zones(ticker, all_market_data[ticker], zone_type, base_limit, min_legout, min_legout_size_pct)
-                if res:
-                    results.extend(res)
-                
-        progress_bar.empty()
+            if df is not None and not df.empty and len(df) >= 20:
+                resampled_df = resample_dataframe(df, timeframe)
+                if resampled_df is not None:
+                    res = scan_zones(ticker, resampled_df, zone_type, base_limit, min_legout, min_legout_size_pct)
+                    if res:
+                        results.extend(res)
+        except Exception:
+            # If Yahoo Finance tries to hang the system, the socket timeout fires, 
+            # breaks the connection, and forces code to skip here safely instead of freezing!
+            continue
+            
+    progress_bar.empty()
+    
+    if results:
+        df_display = pd.DataFrame(results)
+        df_display = df_display.sort_values(by="Formation Date", ascending=False).drop_duplicates(subset=["Ticker"], keep="first")
         
-        if results:
-            df_display = pd.DataFrame(results)
-            df_display = df_display.sort_values(by="Formation Date", ascending=False).drop_duplicates(subset=["Ticker"], keep="first")
+        if state_filter == "Just Approaching (Nearing Edge)":
+            df_display = df_display[df_display['Live Alignment'] == "Just Approaching 🎯"]
+        elif state_filter == "In the Zone (1-6 Candles Formed)":
+            df_display = df_display[df_display['Zone State'] == "In the Zone (1-6 Candles) 🟡"]
+        elif state_filter == "Unmitigated (100% Completely Fresh)":
+            df_display = df_display[df_display['Zone State'] == "Unmitigated 🟢"]
             
-            if state_filter == "Just Approaching (Nearing Edge)":
-                df_display = df_display[df_display['Live Alignment'] == "Just Approaching 🎯"]
-            elif state_filter == "In the Zone (1-6 Candles Formed)":
-                df_display = df_display[df_display['Zone State'] == "In the Zone (1-6 Candles) 🟡"]
-            elif state_filter == "Unmitigated (100% Completely Fresh)":
-                df_display = df_display[df_display['Zone State'] == "Unmitigated 🟢"]
-                
-            if df_display.empty:
-                st.warning("No institutional zones matched your exact state filter conditions at this moment.")
-            else:
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    st.markdown(f"<div class='metric-card'><b>Total Formations:</b><br><span style='font-size:24px;'>{len(df_display)}</span></div>", unsafe_allow_html=True)
-                with c2:
-                    st.markdown(f"<div class='metric-card' style='border-left-color:#00E676;'><b>100% Unmitigated:</b><br><span style='font-size:24px;'>{len(df_display[df_display['Zone State'] == 'Unmitigated 🟢'])}</span></div>", unsafe_allow_html=True)
-                with c3:
-                    st.markdown(f"<div class='metric-card' style='border-left-color:#FFD600;'><b>Active Plays:</b><br><span style='font-size:24px;'>{len(df_display[df_display['Live Alignment'] != 'Normal'])}</span></div>", unsafe_allow_html=True)
-                    
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                def highlight_live_state(val):
-                    if "Approaching" in str(val): return 'background-color: #1B5E20; color: white;'
-                    if "Inside" in str(val): return 'background-color: #E65100; color: white;'
-                    return ''
-                    
-                st.dataframe(
-                    df_display.style.map(highlight_live_state, subset=['Live Alignment']),
-                    use_container_width=True,
-                    hide_index=True
-                )
+        if df_display.empty:
+            st.warning("No institutional zones matched your exact state filter conditions at this moment.")
         else:
-            st.warning("No institutional setups detected matching these core settings within the selected market segment.")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.markdown(f"<div class='metric-card'><b>Total Formations:</b><br><span style='font-size:24px;'>{len(df_display)}</span></div>", unsafe_allow_html=True)
+            with c2:
+                st.markdown(f"<div class='metric-card' style='border-left-color:#00E676;'><b>100% Unmitigated:</b><br><span style='font-size:24px;'>{len(df_display[df_display['Zone State'] == 'Unmitigated 🟢'])}</span></div>", unsafe_allow_html=True)
+            with c3:
+                st.markdown(f"<div class='metric-card' style='border-left-color:#FFD600;'><b>Active Plays:</b><br><span style='font-size:24px;'>{len(df_display[df_display['Live Alignment'] != 'Normal'])}</span></div>", unsafe_allow_html=True)
+                
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            def highlight_live_state(val):
+                if "Approaching" in str(val): return 'background-color: #1B5E20; color: white;'
+                if "Inside" in str(val): return 'background-color: #E65100; color: white;'
+                return ''
+                
+            st.dataframe(
+                df_display.style.map(highlight_live_state, subset=['Live Alignment']),
+                use_container_width=True,
+                hide_index=True
+            )
+    else:
+        st.warning("No institutional setups detected matching these settings within the downloaded parameters.")
