@@ -5,7 +5,7 @@ import numpy as np
 import time
 
 # --- PAGE CONFIGURATION & UI THEME ---
-st.set_page_config(page_title="Institutional Sniper v2.0", layout="wide", page_icon="🎯")
+st.set_page_config(page_title="Institutional Sniper v3.0", layout="wide", page_icon="🎯")
 
 st.markdown("""
     <style>
@@ -16,10 +16,10 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="main-title">⚡ INSTITUTIONAL SNIPER ENGINE v2.0</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">10% Strict Penetration Limit, Local Data Vault & Multi-Timeframe Scanner</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-title">⚡ INSTITUTIONAL SNIPER ENGINE v3.0</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-title">Anti-Ban Bulk Download & 10% Strict Penetration Limit</p>', unsafe_allow_html=True)
 
-# --- LOCAL SECTOR DATA LOADER (ANTI-HANG, INSTANT LOAD) ---
+# --- LOCAL SECTOR DATA LOADER ---
 @st.cache_data
 def load_all_nse_segments():
     segments = {}
@@ -30,14 +30,12 @@ def load_all_nse_segments():
         except:
             return []
 
-    # Reading directly from your GitHub folder instantly
     segments["NIFTY 50 (Mega Cap)"] = format_tickers("ind_nifty50list.csv")
     segments["NIFTY 100 (Large Cap)"] = format_tickers("ind_nifty100list.csv")
     segments["NIFTY Midcap 100"] = format_tickers("ind_niftymidcap100list.csv")
     segments["NIFTY Smallcap 250"] = format_tickers("ind_niftysmallcap250list.csv")
     segments["Full NIFTY 500"] = format_tickers("ind_nifty500list.csv")
     
-    # Fallback if a file name is mistyped
     fallback = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "TATAMOTORS.NS", "SBIN.NS", "ITC.NS", "HINDALCO.NS"]
     for k in list(segments.keys()):
         if not segments[k]:
@@ -86,38 +84,61 @@ with st.sidebar:
 base_list = all_segments[market_segment]
 symbols_to_scan = base_list[:5] if "Quick Test" in scan_range else base_list
 
-# --- FLAWLESS INTRADAY RESAMPLING ENGINE ---
-def fetch_and_resample(ticker, tf):
-    t = yf.Ticker(ticker)
-    if tf == "15m":
-        return t.history(period='60d', interval='15m', timeout=1.5)
-    elif tf in ["75m", "125m"]:
-        base_interval = '15m' if tf == "75m" else '5m'
-        group_size = 5 if tf == "75m" else 25
+# --- ANTI-BAN BULK DATA DOWNLOADER ---
+@st.cache_data(ttl=900) # Caches data for 15 mins to allow instant slider tweaking
+def fetch_bulk_data(tickers, tf):
+    try:
+        if tf == "15m":
+            period, interval = '60d', '15m'
+        elif tf == "75m":
+            period, interval = '60d', '15m'
+        elif tf == "125m":
+            period, interval = '60d', '5m'
+        elif tf in ["1d", "1wk"]:
+            period, interval = '3y', tf
+        else:
+            period, interval = '10y', tf
+
+        # Download all data in one massively optimized multi-threaded request
+        raw_data = yf.download(tickers, period=period, interval=interval, group_by='ticker', threads=True, timeout=15)
         
-        raw = t.history(period='60d', interval=base_interval, timeout=1.5)
-        if len(raw) < group_size: return None
+        # If only 1 ticker is passed (Quick Test), yfinance drops the multi-index. Fix it structurally.
+        if len(tickers) == 1:
+            raw_data.columns = pd.MultiIndex.from_product([tickers, raw_data.columns])
+
+        processed_dict = {}
         
-        raw['Date'] = raw.index.date
-        raw['block'] = raw.groupby('Date').cumcount() // group_size
-        
-        df = raw.groupby(['Date', 'block']).agg({
-            'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'
-        })
-        
-        df.index = raw.groupby(['Date', 'block']).apply(lambda x: x.index[0])
-        return df
-    elif tf in ["1d", "1wk"]:
-        return t.history(period='3y', interval=tf, timeout=1.5)
-    else:
-        return t.history(period='10y', interval=tf, timeout=1.5)
+        for ticker in tickers:
+            try:
+                # Extract specific ticker data and drop completely empty rows
+                df = raw_data[ticker].dropna(how='all').copy()
+                if len(df) < 20: continue
+                
+                # RESAMPLING LOGIC FOR 75M & 125M
+                if tf in ["75m", "125m"]:
+                    group_size = 5 if tf == "75m" else 25
+                    df['Date'] = df.index.date
+                    df['block'] = df.groupby('Date').cumcount() // group_size
+                    
+                    resampled = df.groupby(['Date', 'block']).agg({
+                        'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'
+                    }).dropna()
+                    
+                    # Ensure index is correctly attached
+                    resampled.index = df.groupby(['Date', 'block']).apply(lambda x: x.index[0])
+                    processed_dict[ticker] = resampled
+                else:
+                    processed_dict[ticker] = df
+            except:
+                continue
+                
+        return processed_dict
+    except Exception:
+        return {}
 
 # --- CORE STRICT ALGORITHM ENGINE ---
-def scan_zones(ticker, tf, mode, max_base, min_leg, min_size_threshold):
+def scan_zones(ticker, df, mode, max_base, min_leg, min_size_threshold):
     try:
-        df = fetch_and_resample(ticker, tf)
-        if df is None or len(df) < 20: return None
-        
         current_price = round(df['Close'].iloc[-1], 2)
         
         df['Body'] = (df['Close'] - df['Open']).abs()
@@ -160,7 +181,6 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, min_size_threshold):
                             z_ceil = round(max(df['Open'].iloc[base_start : base_end + 1].max(), df['Close'].iloc[base_start : base_end + 1].max()), 2)
                             z_floor = round(df['Low'].iloc[base_start : base_end + 1].min(), 2)
                             
-                            # 10% PENETRATION TOLERANCE LOGIC
                             zone_size = abs(z_ceil - z_floor)
                             if zone_size == 0: zone_size = 0.01
                             penetration_limit = z_ceil - (zone_size * 0.10)
@@ -246,52 +266,61 @@ def scan_zones(ticker, tf, mode, max_base, min_leg, min_size_threshold):
 if st.button("🔍 Run Institutional Alignment Scan", type="primary", use_container_width=True):
     results = []
     
-    progress_bar = st.progress(0, text="Initializing network data streams...")
-    total_symbols = len(symbols_to_scan)
+    # 1. BULK DOWNLOAD PHASE
+    with st.spinner(f"Initiating High-Speed Bulk Download for {len(symbols_to_scan)} tickers. Please wait..."):
+        all_market_data = fetch_bulk_data(symbols_to_scan, timeframe)
     
-    for idx, ticker in enumerate(symbols_to_scan):
-        progress_bar.progress((idx + 1) / total_symbols, text=f"Analyzing {ticker} Structure ({idx+1}/{total_symbols})...")
-        time.sleep(0.01)
-        
-        res = scan_zones(ticker, timeframe, zone_type, base_limit, min_legout, min_legout_size_pct)
-        if res:
-            results.extend(res)
-            
-    progress_bar.empty()
-    
-    if results:
-        df_display = pd.DataFrame(results)
-        df_display = df_display.sort_values(by="Formation Date", ascending=False).drop_duplicates(subset=["Ticker"], keep="first")
-        
-        if state_filter == "Just Approaching (Nearing Edge)":
-            df_display = df_display[df_display['Live Alignment'] == "Just Approaching 🎯"]
-        elif state_filter == "In the Zone (1-6 Candles Formed)":
-            df_display = df_display[df_display['Zone State'] == "In the Zone (1-6 Candles) 🟡"]
-        elif state_filter == "Unmitigated (100% Completely Fresh)":
-            df_display = df_display[df_display['Zone State'] == "Unmitigated 🟢"]
-            
-        if df_display.empty:
-            st.warning("No institutional zones matched your exact state filter conditions at this moment.")
-        else:
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.markdown(f"<div class='metric-card'><b>Total Formations:</b><br><span style='font-size:24px;'>{len(df_display)}</span></div>", unsafe_allow_html=True)
-            with c2:
-                st.markdown(f"<div class='metric-card' style='border-left-color:#00E676;'><b>100% Unmitigated:</b><br><span style='font-size:24px;'>{len(df_display[df_display['Zone State'] == 'Unmitigated 🟢'])}</span></div>", unsafe_allow_html=True)
-            with c3:
-                st.markdown(f"<div class='metric-card' style='border-left-color:#FFD600;'><b>Active Plays:</b><br><span style='font-size:24px;'>{len(df_display[df_display['Live Alignment'] != 'Normal'])}</span></div>", unsafe_allow_html=True)
-                
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            def highlight_live_state(val):
-                if "Approaching" in str(val): return 'background-color: #1B5E20; color: white;'
-                if "Inside" in str(val): return 'background-color: #E65100; color: white;'
-                return ''
-                
-            st.dataframe(
-                df_display.style.map(highlight_live_state, subset=['Live Alignment']),
-                use_container_width=True,
-                hide_index=True
-            )
+    if not all_market_data:
+        st.error("Data connection failed. Yahoo Finance might be temporarily blocking the connection. Please try again in a few minutes.")
     else:
-        st.warning("No institutional setups detected matching these core settings within the selected market segment.")
+        # 2. LOCAL CALCULATION PHASE (Lightning Fast)
+        progress_bar = st.progress(0, text="Crunching institutional formulas...")
+        total_symbols = len(symbols_to_scan)
+        
+        for idx, ticker in enumerate(symbols_to_scan):
+            progress_bar.progress((idx + 1) / total_symbols, text=f"Analyzing {ticker} Structure ({idx+1}/{total_symbols})...")
+            time.sleep(0.005) # Just enough for the UI to breathe
+            
+            if ticker in all_market_data:
+                res = scan_zones(ticker, all_market_data[ticker], zone_type, base_limit, min_legout, min_legout_size_pct)
+                if res:
+                    results.extend(res)
+                
+        progress_bar.empty()
+        
+        if results:
+            df_display = pd.DataFrame(results)
+            df_display = df_display.sort_values(by="Formation Date", ascending=False).drop_duplicates(subset=["Ticker"], keep="first")
+            
+            if state_filter == "Just Approaching (Nearing Edge)":
+                df_display = df_display[df_display['Live Alignment'] == "Just Approaching 🎯"]
+            elif state_filter == "In the Zone (1-6 Candles Formed)":
+                df_display = df_display[df_display['Zone State'] == "In the Zone (1-6 Candles) 🟡"]
+            elif state_filter == "Unmitigated (100% Completely Fresh)":
+                df_display = df_display[df_display['Zone State'] == "Unmitigated 🟢"]
+                
+            if df_display.empty:
+                st.warning("No institutional zones matched your exact state filter conditions at this moment.")
+            else:
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.markdown(f"<div class='metric-card'><b>Total Formations:</b><br><span style='font-size:24px;'>{len(df_display)}</span></div>", unsafe_allow_html=True)
+                with c2:
+                    st.markdown(f"<div class='metric-card' style='border-left-color:#00E676;'><b>100% Unmitigated:</b><br><span style='font-size:24px;'>{len(df_display[df_display['Zone State'] == 'Unmitigated 🟢'])}</span></div>", unsafe_allow_html=True)
+                with c3:
+                    st.markdown(f"<div class='metric-card' style='border-left-color:#FFD600;'><b>Active Plays:</b><br><span style='font-size:24px;'>{len(df_display[df_display['Live Alignment'] != 'Normal'])}</span></div>", unsafe_allow_html=True)
+                    
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                def highlight_live_state(val):
+                    if "Approaching" in str(val): return 'background-color: #1B5E20; color: white;'
+                    if "Inside" in str(val): return 'background-color: #E65100; color: white;'
+                    return ''
+                    
+                st.dataframe(
+                    df_display.style.map(highlight_live_state, subset=['Live Alignment']),
+                    use_container_width=True,
+                    hide_index=True
+                )
+        else:
+            st.warning("No institutional setups detected matching these core settings within the selected market segment.")
